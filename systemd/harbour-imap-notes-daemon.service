@@ -1,0 +1,16 @@
+[Unit]
+Description=harbour-imap-notes background sync daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/harbour-imap-notes-daemon
+Restart=on-failure
+RestartSec=30
+# The daemon is idle between syncs; keep its memory footprint capped.
+MemoryHigh=64M
+MemoryMax=128M
+
+[Install]
+WantedBy=default.target

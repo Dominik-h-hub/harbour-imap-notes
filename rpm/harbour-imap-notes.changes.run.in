@@ -1,8 +1,9 @@
 #!/bin/bash
 #
-# Rename this file as imapNotes.changes.run to let sfdk automatically
-# generate changelog from well formatted Git commit messages and tag
-# annotations. Note that 'sfdk changelog' must be invoked as 'sfdk-changelog' here.
+# Rename this file as harbour-imap-notes.changes.run to let sfdk
+# automatically generate changelog from well formatted Git commit
+# messages and tag annotations. Note that 'sfdk changelog' must be
+# invoked as 'sfdk-changelog' here.
 
 sfdk-changelog
 
