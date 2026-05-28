@@ -1,78 +1,149 @@
+// IMAP4rev1 client implemented on top of QSslSocket.
+// No external libraries required — uses only Qt5Network.
+//
+// All public methods are synchronous/blocking and are designed to run on a
+// dedicated worker thread.  The implementation follows RFC 3501 (IMAP4rev1),
+// RFC 2177 (IDLE), RFC 6851 (MOVE), and RFC 4315 (UIDPLUS APPENDUID).
+
 #include "imapclient.h"
 
-#include <libetpan/libetpan.h>
-
+#include <QSslSocket>
 #include <QtDebug>
 
 #include <fcntl.h>
 #include <sys/select.h>
 #include <unistd.h>
 
+// ────────────────────────────────────────────────────────────────────────────
+//  Constants
+// ────────────────────────────────────────────────────────────────────────────
+
+static const int kConnectTimeoutMs = 30000;
+static const int kReadTimeoutMs    = 30000;
+static const int kWriteTimeoutMs   = 15000;
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Internal helpers
+// ────────────────────────────────────────────────────────────────────────────
+
 namespace {
 
-// libetpan owns the raw buffer returned by mailimap_fetch — we copy what we
-// need before freeing the result list.
-QByteArray copyMessagePayload(clistiter *att_iter)
+// Return a properly IMAP-quoted (double-quoted) representation of a UTF-8
+// mailbox name.
+QByteArray quotedMailbox(const QString &name)
 {
-    QByteArray out;
-    for (; att_iter; att_iter = clist_next(att_iter)) {
-        auto *att_item = static_cast<mailimap_msg_att_item *>(clist_content(att_iter));
-        if (att_item->att_type != MAILIMAP_MSG_ATT_ITEM_STATIC) continue;
-        auto *att_static = att_item->att_data.att_static;
-        if (att_static->att_type == MAILIMAP_MSG_ATT_BODY_SECTION) {
-            const char *data = att_static->att_data.att_body_section->sec_body_part;
-            const size_t length = att_static->att_data.att_body_section->sec_length;
-            if (data && length > 0) {
-                out = QByteArray(data, static_cast<int>(length));
-            }
-        } else if (att_static->att_type == MAILIMAP_MSG_ATT_RFC822) {
-            const char *data = att_static->att_data.att_rfc822.att_content;
-            const size_t length = att_static->att_data.att_rfc822.att_length;
-            if (data && length > 0) {
-                out = QByteArray(data, static_cast<int>(length));
-            }
+    const QByteArray utf8 = name.toUtf8();
+    bool needsQuote = utf8.isEmpty();
+    for (char c : utf8) {
+        unsigned char uc = static_cast<unsigned char>(c);
+        if (uc > 127 || c == ' ' || c == '(' || c == ')' || c == '{' ||
+            c == '"' || c == '\\' || c == '%' || c == '*') {
+            needsQuote = true;
+            break;
         }
     }
-    return out;
-}
+    if (!needsQuote) return utf8;
 
-quint32 readUid(clistiter *att_iter)
-{
-    for (; att_iter; att_iter = clist_next(att_iter)) {
-        auto *att_item = static_cast<mailimap_msg_att_item *>(clist_content(att_iter));
-        if (att_item->att_type != MAILIMAP_MSG_ATT_ITEM_STATIC) continue;
-        auto *att_static = att_item->att_data.att_static;
-        if (att_static->att_type == MAILIMAP_MSG_ATT_UID) {
-            return att_static->att_data.att_uid;
-        }
+    QByteArray q;
+    q.reserve(utf8.size() + 2);
+    q += '"';
+    for (char c : utf8) {
+        if (c == '"' || c == '\\') q += '\\';
+        q += c;
     }
-    return 0;
+    q += '"';
+    return q;
 }
 
-QString readHeaderValue(clistiter *att_iter, const QString &name)
+// Build a comma-separated UID set string from a list.
+QByteArray uidSet(const QList<quint32> &uids)
 {
-    for (; att_iter; att_iter = clist_next(att_iter)) {
-        auto *att_item = static_cast<mailimap_msg_att_item *>(clist_content(att_iter));
-        if (att_item->att_type != MAILIMAP_MSG_ATT_ITEM_STATIC) continue;
-        auto *att_static = att_item->att_data.att_static;
-        if (att_static->att_type != MAILIMAP_MSG_ATT_BODY_SECTION) continue;
-        const char *data = att_static->att_data.att_body_section->sec_body_part;
-        const size_t length = att_static->att_data.att_body_section->sec_length;
-        if (!data || length == 0) continue;
+    QByteArray s;
+    for (int i = 0; i < uids.size(); ++i) {
+        if (i > 0) s += ',';
+        s += QByteArray::number(uids[i]);
+    }
+    return s;
+}
 
-        const QByteArray raw(data, static_cast<int>(length));
-        const QByteArray needle = name.toLatin1() + ':';
-        const int idx = raw.toLower().indexOf(needle.toLower());
-        if (idx < 0) continue;
-        int end = raw.indexOf('\n', idx);
-        if (end < 0) end = raw.size();
-        QString line = QString::fromLatin1(raw.mid(idx + needle.size(), end - idx - needle.size()));
-        return line.trimmed();
+// Extract the content between the *first* pair of square brackets in a line,
+// e.g. "* OK [UIDVALIDITY 42] some text" → "UIDVALIDITY 42".
+QByteArray bracketContent(const QByteArray &line)
+{
+    int open  = line.indexOf('[');
+    int close = line.indexOf(']', open);
+    if (open < 0 || close <= open) return {};
+    return line.mid(open + 1, close - open - 1);
+}
+
+// Scan the parenthesised FETCH attribute list (the part after "N FETCH ")
+// for an attribute named `attrName` and return its value.
+// Literal data (already inlined by readResponse) appears as:
+//   ATTR {N}\n<N bytes>\n
+QByteArray fetchAttrValue(const QByteArray &block, const QByteArray &attrName)
+{
+    const QByteArray upper = block.toUpper();
+    const QByteArray key   = attrName.toUpper();
+
+    int pos = 0;
+    while ((pos = upper.indexOf(key, pos)) >= 0) {
+        bool leftOk  = (pos == 0 || upper[pos - 1] == ' '
+                        || upper[pos - 1] == '(' || upper[pos - 1] == '\n');
+        if (!leftOk) { ++pos; continue; }
+
+        int after = pos + key.size();
+        // Skip optional "[…]" for BODY[…]
+        if (after < upper.size() && upper[after] == '[') {
+            int end = upper.indexOf(']', after);
+            if (end >= 0) after = end + 1;
+        }
+        // Skip spaces
+        while (after < block.size() && block[after] == ' ') ++after;
+        if (after >= block.size()) break;
+
+        char ch = block[after];
+        if (ch == '{') {
+            // Inlined literal: {N}\n<data>
+            int brace = block.indexOf('}', after);
+            if (brace < 0) break;
+            bool ok;
+            int len = block.mid(after + 1, brace - after - 1).toInt(&ok);
+            if (!ok || len < 0) break;
+            int dataStart = brace + 1;
+            if (dataStart < block.size() && block[dataStart] == '\n') ++dataStart;
+            return block.mid(dataStart, len);
+        } else if (ch == '(') {
+            int depth = 0, start = after;
+            for (int i = after; i < block.size(); ++i) {
+                if (block[i] == '(') ++depth;
+                else if (block[i] == ')') {
+                    if (--depth == 0) return block.mid(start, i - start + 1);
+                }
+            }
+        } else if (ch == '"') {
+            int end = after + 1;
+            while (end < block.size()) {
+                if (block[end] == '\\') ++end;
+                else if (block[end] == '"') break;
+                ++end;
+            }
+            return block.mid(after + 1, end - after - 1);
+        } else {
+            int end = after;
+            while (end < block.size() && block[end] != ' ' &&
+                   block[end] != ')' && block[end] != '\n') ++end;
+            return block.mid(after, end - after);
+        }
+        ++pos;
     }
     return {};
 }
 
 } // namespace
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Construction / destruction
+// ────────────────────────────────────────────────────────────────────────────
 
 ImapClient::ImapClient(QObject *parent)
     : QObject(parent)
@@ -82,80 +153,229 @@ ImapClient::ImapClient(QObject *parent)
 ImapClient::~ImapClient()
 {
     disconnectFromHost();
-    closeCancelPipe();
-}
-
-bool ImapClient::ensureCancelPipe()
-{
-    if (m_cancelPipe[0] != -1) return true;
-    if (::pipe(m_cancelPipe) != 0) {
-        m_cancelPipe[0] = -1;
-        m_cancelPipe[1] = -1;
-        return false;
-    }
-    // Reads should never block — the caller drains the pipe inside select().
-    ::fcntl(m_cancelPipe[0], F_SETFL, O_NONBLOCK);
-    ::fcntl(m_cancelPipe[1], F_SETFL, O_NONBLOCK);
-    return true;
-}
-
-void ImapClient::closeCancelPipe()
-{
     if (m_cancelPipe[0] != -1) ::close(m_cancelPipe[0]);
     if (m_cancelPipe[1] != -1) ::close(m_cancelPipe[1]);
     m_cancelPipe[0] = m_cancelPipe[1] = -1;
 }
 
-bool ImapClient::isConnected() const
-{
-    return m_session != nullptr;
-}
+// ────────────────────────────────────────────────────────────────────────────
+//  Low-level I/O
+// ────────────────────────────────────────────────────────────────────────────
 
-bool ImapClient::hasCapability(const QString &name) const
+QByteArray ImapClient::readPhysicalLine()
 {
-    return m_capabilities.contains(name.toUpper());
-}
-
-void ImapClient::recordEtpanError(int code, const QString &context)
-{
-    QString message = context;
-    if (m_session && m_session->imap_response) {
-        message += QStringLiteral(": ") + QString::fromUtf8(m_session->imap_response);
-    } else {
-        message += QStringLiteral(": libetpan error %1").arg(code);
+    QByteArray line;
+    while (true) {
+        while (m_socket->bytesAvailable() == 0) {
+            if (!m_socket->waitForReadyRead(kReadTimeoutMs)) {
+                setError(QStringLiteral("Read timeout"), m_socket->errorString());
+                return {};
+            }
+        }
+        char c;
+        if (m_socket->read(&c, 1) != 1) break;
+        if (c == '\n') break;
+        if (c != '\r') line += c;
     }
-    m_lastError = message;
+    return line;
+}
+
+QByteArray ImapClient::readBytes(int n)
+{
+    QByteArray data;
+    data.reserve(n);
+    while (data.size() < n) {
+        if (m_socket->bytesAvailable() == 0) {
+            if (!m_socket->waitForReadyRead(kReadTimeoutMs)) {
+                setError(QStringLiteral("Read timeout (literal)"), m_socket->errorString());
+                return data;
+            }
+        }
+        QByteArray chunk = m_socket->read(n - data.size());
+        if (chunk.isEmpty()) break;
+        data += chunk;
+    }
+    return data;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Response reader
+// ────────────────────────────────────────────────────────────────────────────
+
+ImapClient::ImapResponse ImapClient::readResponse(const QByteArray &tag)
+{
+    ImapResponse resp;
+    const QByteArray tagPrefix = tag + ' ';
+
+    while (true) {
+        QByteArray line = readPhysicalLine();
+        if (line.isEmpty() && (!m_socket || !m_socket->isOpen())) {
+            resp.ok = false;
+            return resp;
+        }
+
+        if (line.startsWith(tagPrefix)) {
+            resp.tagLine = line;
+            resp.ok = line.mid(tagPrefix.size()).startsWith("OK");
+            return resp;
+        }
+
+        // Inline literal data: a line ending with {N} is immediately followed
+        // by N raw bytes, then another "continuation" physical line.
+        // We may need several rounds (chained literals are rare but possible).
+        while (line.endsWith('}')) {
+            int open = line.lastIndexOf('{');
+            if (open < 0) break;
+            bool numOk;
+            int litLen = line.mid(open + 1, line.size() - open - 2).toInt(&numOk);
+            if (!numOk || litLen < 0) break;
+            QByteArray literal = readBytes(litLen);
+            line += '\n';
+            line += literal;
+            QByteArray cont = readPhysicalLine();
+            line += '\n';
+            line += cont;
+        }
+
+        resp.untagged.append(line);
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Command helpers
+// ────────────────────────────────────────────────────────────────────────────
+
+QByteArray ImapClient::nextTag()
+{
+    return QByteArrayLiteral("A") + QByteArray::number(++m_tagCounter);
+}
+
+ImapClient::ImapResponse ImapClient::runCommand(const QByteArray &cmdWithoutTag)
+{
+    const QByteArray tag  = nextTag();
+    const QByteArray line = tag + ' ' + cmdWithoutTag + "\r\n";
+    m_socket->write(line);
+    if (!m_socket->waitForBytesWritten(kWriteTimeoutMs)) {
+        setError(QStringLiteral("Write"), m_socket->errorString());
+        ImapResponse err;
+        return err;
+    }
+    return readResponse(tag);
+}
+
+ImapClient::ImapResponse ImapClient::runAppend(const QString &folder,
+                                                const QByteArray &rawMessage,
+                                                quint32 *newUid)
+{
+    const QByteArray tag = nextTag();
+    const QByteArray cmd = tag + " APPEND " + quotedMailbox(folder)
+                           + " {" + QByteArray::number(rawMessage.size()) + "}\r\n";
+    m_socket->write(cmd);
+    if (!m_socket->waitForBytesWritten(kWriteTimeoutMs)) {
+        setError(QStringLiteral("APPEND header write"), m_socket->errorString());
+        ImapResponse err; return err;
+    }
+
+    // Wait for server continuation "+"
+    QByteArray cont = readPhysicalLine();
+    if (!cont.startsWith('+')) {
+        ImapResponse err;
+        err.tagLine = cont;
+        err.ok = false;
+        return err;
+    }
+
+    m_socket->write(rawMessage);
+    m_socket->write("\r\n");
+    if (!m_socket->waitForBytesWritten(kWriteTimeoutMs)) {
+        setError(QStringLiteral("APPEND literal write"), m_socket->errorString());
+        ImapResponse err; return err;
+    }
+
+    ImapResponse resp = readResponse(tag);
+
+    if (resp.ok && newUid) {
+        *newUid = 0;
+        const QByteArray bc = bracketContent(resp.tagLine);
+        if (bc.toUpper().startsWith("APPENDUID")) {
+            const QList<QByteArray> parts = bc.split(' ');
+            if (parts.size() >= 3) {
+                bool ok;
+                quint32 u = parts[2].trimmed().toUInt(&ok);
+                if (ok) *newUid = u;
+            }
+        }
+    }
+    return resp;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+//  Error recording
+// ────────────────────────────────────────────────────────────────────────────
+
+void ImapClient::setError(const QString &context, const QString &detail)
+{
+    m_lastError = detail.isEmpty()
+                  ? context
+                  : context + QStringLiteral(": ") + detail;
     emit error(m_lastError);
     qWarning() << "ImapClient:" << m_lastError;
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+//  Connection
+// ────────────────────────────────────────────────────────────────────────────
+
+bool ImapClient::isConnected() const
+{
+    return m_socket && m_socket->state() == QAbstractSocket::ConnectedState;
+}
+
 bool ImapClient::connectToHost(const QString &host, int port, Security security)
 {
-    if (m_session) {
-        disconnectFromHost();
-    }
-    m_session = mailimap_new(0, nullptr);
-    if (!m_session) {
-        m_lastError = QStringLiteral("mailimap_new failed");
-        return false;
+    if (m_socket) disconnectFromHost();
+
+    m_socket = new QSslSocket(this);
+    // Allow self-signed / internal CA certs; add proper pinning as needed.
+    m_socket->setPeerVerifyMode(QSslSocket::VerifyNone);
+
+    if (security == ImplicitSsl) {
+        m_socket->connectToHostEncrypted(host, static_cast<quint16>(port));
+        if (!m_socket->waitForEncrypted(kConnectTimeoutMs)) {
+            setError(QStringLiteral("SSL connect to %1:%2").arg(host).arg(port),
+                     m_socket->errorString());
+            delete m_socket; m_socket = nullptr;
+            return false;
+        }
+    } else {
+        m_socket->connectToHost(host, static_cast<quint16>(port));
+        if (!m_socket->waitForConnected(kConnectTimeoutMs)) {
+            setError(QStringLiteral("connect to %1:%2").arg(host).arg(port),
+                     m_socket->errorString());
+            delete m_socket; m_socket = nullptr;
+            return false;
+        }
     }
 
-    int r = (security == ImplicitSsl)
-        ? mailimap_ssl_connect(m_session, host.toUtf8().constData(), static_cast<quint16>(port))
-        : mailimap_socket_connect(m_session, host.toUtf8().constData(), static_cast<quint16>(port));
-    if (r != MAILIMAP_NO_ERROR && r != MAILIMAP_NO_ERROR_AUTHENTICATED && r != MAILIMAP_NO_ERROR_NON_AUTHENTICATED) {
-        recordEtpanError(r, QStringLiteral("connect to %1:%2").arg(host).arg(port));
-        mailimap_free(m_session);
-        m_session = nullptr;
+    // Read server greeting
+    QByteArray greeting = readPhysicalLine();
+    if (!greeting.startsWith("* OK") && !greeting.startsWith("* PREAUTH")) {
+        setError(QStringLiteral("Unexpected greeting"), QString::fromLatin1(greeting));
+        delete m_socket; m_socket = nullptr;
         return false;
     }
 
     if (security == StartTls) {
-        r = mailimap_socket_starttls(m_session);
-        if (r != MAILIMAP_NO_ERROR) {
-            recordEtpanError(r, QStringLiteral("STARTTLS"));
-            mailimap_free(m_session);
-            m_session = nullptr;
+        ImapResponse r = runCommand("STARTTLS");
+        if (!r.ok) {
+            setError(QStringLiteral("STARTTLS"), QString::fromLatin1(r.tagLine));
+            delete m_socket; m_socket = nullptr;
+            return false;
+        }
+        m_socket->startClientEncryption();
+        if (!m_socket->waitForEncrypted(kConnectTimeoutMs)) {
+            setError(QStringLiteral("TLS handshake"), m_socket->errorString());
+            delete m_socket; m_socket = nullptr;
             return false;
         }
     }
@@ -165,15 +385,22 @@ bool ImapClient::connectToHost(const QString &host, int port, Security security)
 
 bool ImapClient::login(const QString &username, const QString &password)
 {
-    if (!m_session) {
-        m_lastError = QStringLiteral("Not connected");
-        return false;
-    }
-    const int r = mailimap_login(m_session,
-                                 username.toUtf8().constData(),
-                                 password.toUtf8().constData());
-    if (r != MAILIMAP_NO_ERROR) {
-        recordEtpanError(r, QStringLiteral("LOGIN"));
+    if (!m_socket) { m_lastError = QStringLiteral("Not connected"); return false; }
+
+    auto escape = [](const QString &s) -> QByteArray {
+        QByteArray out;
+        out += '"';
+        for (const QChar &c : s) {
+            if (c == QLatin1Char('"') || c == QLatin1Char('\\')) out += '\\';
+            out += c.toLatin1();
+        }
+        out += '"';
+        return out;
+    };
+
+    ImapResponse r = runCommand("LOGIN " + escape(username) + " " + escape(password));
+    if (!r.ok) {
+        setError(QStringLiteral("LOGIN"), QString::fromLatin1(r.tagLine));
         return false;
     }
     return refreshCapabilities();
@@ -182,123 +409,174 @@ bool ImapClient::login(const QString &username, const QString &password)
 bool ImapClient::refreshCapabilities()
 {
     m_capabilities.clear();
-    mailimap_capability_data *caps = nullptr;
-    const int r = mailimap_capability(m_session, &caps);
-    if (r != MAILIMAP_NO_ERROR || !caps) {
-        return true; // server may not advertise — not fatal
+    ImapResponse r = runCommand("CAPABILITY");
+    for (const QByteArray &line : r.untagged) {
+        if (!line.toUpper().startsWith("* CAPABILITY")) continue;
+        const QList<QByteArray> tokens = line.split(' ');
+        for (int i = 2; i < tokens.size(); ++i)
+            m_capabilities.insert(QString::fromLatin1(tokens[i].trimmed()).toUpper());
     }
-    for (clistiter *it = clist_begin(caps->cap_list); it; it = clist_next(it)) {
-        auto *cap = static_cast<mailimap_capability *>(clist_content(it));
-        if (cap->cap_type == MAILIMAP_CAPABILITY_NAME && cap->cap_data.cap_name) {
-            m_capabilities.insert(QString::fromLatin1(cap->cap_data.cap_name).toUpper());
+    if (r.ok) {
+        const QByteArray bc = bracketContent(r.tagLine);
+        if (bc.toUpper().startsWith("CAPABILITY")) {
+            const QList<QByteArray> tokens = bc.split(' ');
+            for (int i = 1; i < tokens.size(); ++i)
+                m_capabilities.insert(QString::fromLatin1(tokens[i].trimmed()).toUpper());
         }
     }
-    mailimap_capability_data_free(caps);
     return true;
 }
 
 void ImapClient::disconnectFromHost()
 {
-    if (!m_session) return;
-    // logout can fail if the connection is already half-broken — ignore errors
-    // here, we are tearing down anyway.
-    mailimap_logout(m_session);
-    mailimap_free(m_session);
-    m_session = nullptr;
+    if (!m_socket) return;
+    if (m_socket->state() == QAbstractSocket::ConnectedState) {
+        const QByteArray tag = nextTag();
+        m_socket->write(tag + " LOGOUT\r\n");
+        m_socket->waitForBytesWritten(kWriteTimeoutMs);
+        m_socket->waitForReadyRead(3000);
+        m_socket->disconnectFromHost();
+    }
+    m_socket->deleteLater();
+    m_socket = nullptr;
     m_selectedFolder.clear();
     m_capabilities.clear();
     emit disconnected();
 }
 
-bool ImapClient::listFolders(const QString &reference,
-                             const QString &pattern,
-                             QList<FolderInfo> *out)
+bool ImapClient::hasCapability(const QString &name) const
 {
-    if (!m_session || !out) return false;
+    return m_capabilities.contains(name.toUpper());
+}
 
-    clist *list_result = nullptr;
-    const int r = mailimap_list(m_session,
-                                reference.toUtf8().constData(),
-                                pattern.toUtf8().constData(),
-                                &list_result);
-    if (r != MAILIMAP_NO_ERROR) {
-        recordEtpanError(r, QStringLiteral("LIST %1 %2").arg(reference, pattern));
+// ────────────────────────────────────────────────────────────────────────────
+//  Folder operations
+// ────────────────────────────────────────────────────────────────────────────
+
+bool ImapClient::listFolders(const QString &reference,
+                              const QString &pattern,
+                              QList<FolderInfo> *out)
+{
+    if (!m_socket || !out) return false;
+
+    ImapResponse r = runCommand("LIST " + quotedMailbox(reference)
+                                + " " + quotedMailbox(pattern));
+    if (!r.ok) {
+        setError(QStringLiteral("LIST"), QString::fromLatin1(r.tagLine));
         return false;
     }
 
-    for (clistiter *it = clist_begin(list_result); it; it = clist_next(it)) {
-        auto *mbx = static_cast<mailimap_mailbox_list *>(clist_content(it));
+    for (const QByteArray &line : r.untagged) {
+        if (!line.toUpper().startsWith("* LIST")) continue;
+
         FolderInfo info;
-        info.fullPath = QString::fromUtf8(mbx->mb_name);
-        if (mbx->mb_delimiter) {
-            info.delimiter = QString(QChar(mbx->mb_delimiter));
+
+        const int flagsOpen  = line.indexOf('(');
+        const int flagsClose = line.indexOf(')', flagsOpen);
+        if (flagsOpen >= 0 && flagsClose > flagsOpen) {
+            const QByteArray flags =
+                line.mid(flagsOpen + 1, flagsClose - flagsOpen - 1).toUpper();
+            if (flags.contains("\\NOSELECT") || flags.contains("NOSELECT"))
+                info.selectable = false;
+        }
+
+        QByteArray rest = line.mid(flagsClose + 1).trimmed();
+
+        // Delimiter
+        QByteArray delim;
+        if (rest.startsWith("NIL")) {
+            delim = m_hierarchyDelimiter.toLatin1();
+            rest  = rest.mid(3).trimmed();
+        } else if (rest.startsWith('"')) {
+            int end = rest.indexOf('"', 1);
+            if (end > 0) { delim = rest.mid(1, end - 1); rest = rest.mid(end + 1).trimmed(); }
+        }
+
+        if (!delim.isEmpty()) {
+            info.delimiter     = QString::fromLatin1(delim);
             m_hierarchyDelimiter = info.delimiter;
         } else {
             info.delimiter = m_hierarchyDelimiter;
         }
-        if (mbx->mb_flag && mbx->mb_flag->mbf_sflag == MAILIMAP_MBX_LIST_SFLAG_NOSELECT) {
-            info.selectable = false;
+
+        // Name
+        if (rest.startsWith('"')) {
+            int end = 1;
+            while (end < rest.size()) {
+                if (rest[end] == '\\') ++end;
+                else if (rest[end] == '"') break;
+                ++end;
+            }
+            info.fullPath = QString::fromUtf8(rest.mid(1, end - 1));
+        } else {
+            info.fullPath = QString::fromUtf8(rest);
         }
-        out->append(info);
+
+        if (!info.fullPath.isEmpty()) out->append(info);
     }
-    mailimap_list_result_free(list_result);
     return true;
 }
 
 bool ImapClient::createFolder(const QString &path)
 {
-    if (!m_session) return false;
-    const int r = mailimap_create(m_session, path.toUtf8().constData());
-    if (r != MAILIMAP_NO_ERROR) {
-        recordEtpanError(r, QStringLiteral("CREATE %1").arg(path));
-        return false;
-    }
+    if (!m_socket) return false;
+    ImapResponse r = runCommand("CREATE " + quotedMailbox(path));
+    if (!r.ok) { setError(QStringLiteral("CREATE"), QString::fromLatin1(r.tagLine)); return false; }
     return true;
 }
 
 bool ImapClient::deleteFolder(const QString &path)
 {
-    if (!m_session) return false;
-    const int r = mailimap_delete(m_session, path.toUtf8().constData());
-    if (r != MAILIMAP_NO_ERROR) {
-        recordEtpanError(r, QStringLiteral("DELETE %1").arg(path));
-        return false;
-    }
+    if (!m_socket) return false;
+    ImapResponse r = runCommand("DELETE " + quotedMailbox(path));
+    if (!r.ok) { setError(QStringLiteral("DELETE"), QString::fromLatin1(r.tagLine)); return false; }
     return true;
 }
 
 bool ImapClient::renameFolder(const QString &oldPath, const QString &newPath)
 {
-    if (!m_session) return false;
-    const int r = mailimap_rename(m_session,
-                                  oldPath.toUtf8().constData(),
-                                  newPath.toUtf8().constData());
-    if (r != MAILIMAP_NO_ERROR) {
-        recordEtpanError(r, QStringLiteral("RENAME %1 -> %2").arg(oldPath, newPath));
-        return false;
-    }
+    if (!m_socket) return false;
+    ImapResponse r = runCommand("RENAME " + quotedMailbox(oldPath)
+                                + " " + quotedMailbox(newPath));
+    if (!r.ok) { setError(QStringLiteral("RENAME"), QString::fromLatin1(r.tagLine)); return false; }
     return true;
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+//  Message operations
+// ────────────────────────────────────────────────────────────────────────────
+
 bool ImapClient::selectFolder(const QString &path, SelectResult *out)
 {
-    if (!m_session) return false;
-    const int r = mailimap_select(m_session, path.toUtf8().constData());
-    if (r != MAILIMAP_NO_ERROR) {
-        recordEtpanError(r, QStringLiteral("SELECT %1").arg(path));
+    if (!m_socket) return false;
+    ImapResponse r = runCommand("SELECT " + quotedMailbox(path));
+    if (!r.ok) {
+        setError(QStringLiteral("SELECT"), QString::fromLatin1(r.tagLine));
         return false;
     }
     m_selectedFolder = path;
     if (out) {
-        out->uidValidity = m_session->imap_selection_info
-            ? m_session->imap_selection_info->sel_uidvalidity : 0;
-        out->uidNext = m_session->imap_selection_info
-            ? m_session->imap_selection_info->sel_uidnext : 0;
-        out->exists = m_session->imap_selection_info
-            ? m_session->imap_selection_info->sel_exists : 0;
-        // libetpan keeps the modseq on the optional condstore part of the
-        // selection info; if CONDSTORE isn't supported it stays 0.
-        out->highestModSeq = 0;
+        *out = SelectResult{};
+        for (const QByteArray &line : r.untagged) {
+            if (line.endsWith(" EXISTS")) {
+                bool ok;
+                quint32 n = line.mid(2, line.indexOf(' ', 2) - 2).toUInt(&ok);
+                if (ok) out->exists = n;
+            }
+            const QByteArray bc = bracketContent(line);
+            if (!bc.isEmpty()) {
+                const QList<QByteArray> parts = bc.split(' ');
+                const QByteArray kw = parts.value(0).toUpper();
+                bool ok;
+                if (kw == "UIDVALIDITY" && parts.size() > 1) {
+                    quint32 v = parts[1].toUInt(&ok);
+                    if (ok) out->uidValidity = v;
+                } else if (kw == "UIDNEXT" && parts.size() > 1) {
+                    quint32 v = parts[1].toUInt(&ok);
+                    if (ok) out->uidNext = v;
+                }
+            }
+        }
     }
     return true;
 }
@@ -310,135 +588,105 @@ bool ImapClient::fetchAllUids(QList<quint32> *out)
 
 bool ImapClient::fetchUidsSince(quint32 sinceUid, QList<quint32> *out)
 {
-    if (!m_session || !out) return false;
+    if (!m_socket || !out) return false;
 
-    mailimap_set *set = mailimap_set_new_interval(sinceUid, 0);
-    mailimap_fetch_type *fetch_type = mailimap_fetch_type_new_fetch_att_list_empty();
-    mailimap_fetch_type_new_fetch_att_list_add(fetch_type, mailimap_fetch_att_new_uid());
-
-    clist *fetch_result = nullptr;
-    const int r = mailimap_uid_fetch(m_session, set, fetch_type, &fetch_result);
-    mailimap_set_free(set);
-    mailimap_fetch_type_free(fetch_type);
-    if (r != MAILIMAP_NO_ERROR) {
-        recordEtpanError(r, QStringLiteral("UID FETCH %1:* (UID)").arg(sinceUid));
+    const QByteArray range = QByteArray::number(sinceUid) + ":*";
+    ImapResponse r = runCommand("UID FETCH " + range + " (UID)");
+    if (!r.ok) {
+        setError(QStringLiteral("UID FETCH (UID)"), QString::fromLatin1(r.tagLine));
         return false;
     }
 
-    for (clistiter *it = clist_begin(fetch_result); it; it = clist_next(it)) {
-        auto *msg = static_cast<mailimap_msg_att *>(clist_content(it));
-        const quint32 uid = readUid(clist_begin(msg->att_list));
-        if (uid > 0) out->append(uid);
+    for (const QByteArray &line : r.untagged) {
+        if (!line.toUpper().contains(" FETCH ")) continue;
+        const int paren = line.indexOf('(');
+        if (paren < 0) continue;
+        const QByteArray body = line.mid(paren);
+        const QByteArray val  = fetchAttrValue(body, "UID");
+        if (!val.isEmpty()) {
+            bool ok;
+            quint32 uid = val.toUInt(&ok);
+            if (ok && uid >= sinceUid) out->append(uid);
+        }
     }
-    mailimap_fetch_list_free(fetch_result);
     return true;
 }
 
 bool ImapClient::fetchFullMessage(quint32 uid, QByteArray *out)
 {
-    if (!m_session || !out) return false;
+    if (!m_socket || !out) return false;
 
-    mailimap_set *set = mailimap_set_new_single(uid);
-    mailimap_fetch_type *fetch_type = mailimap_fetch_type_new_fetch_att_list_empty();
-    mailimap_section *section = mailimap_section_new(nullptr); // whole body
-    mailimap_fetch_type_new_fetch_att_list_add(
-        fetch_type, mailimap_fetch_att_new_body_peek_section(section));
-
-    clist *fetch_result = nullptr;
-    const int r = mailimap_uid_fetch(m_session, set, fetch_type, &fetch_result);
-    mailimap_set_free(set);
-    mailimap_fetch_type_free(fetch_type);
-    if (r != MAILIMAP_NO_ERROR) {
-        recordEtpanError(r, QStringLiteral("UID FETCH %1 BODY.PEEK[]").arg(uid));
+    ImapResponse r = runCommand("UID FETCH " + QByteArray::number(uid)
+                                + " (BODY.PEEK[])");
+    if (!r.ok) {
+        setError(QStringLiteral("UID FETCH BODY.PEEK[]"), QString::fromLatin1(r.tagLine));
         return false;
     }
 
-    QByteArray payload;
-    for (clistiter *it = clist_begin(fetch_result); it; it = clist_next(it)) {
-        auto *msg = static_cast<mailimap_msg_att *>(clist_content(it));
-        payload = copyMessagePayload(clist_begin(msg->att_list));
-        if (!payload.isEmpty()) break;
+    for (const QByteArray &line : r.untagged) {
+        if (!line.toUpper().contains(" FETCH ")) continue;
+        const int paren = line.indexOf('(');
+        if (paren < 0) continue;
+        const QByteArray body = line.mid(paren);
+        QByteArray val = fetchAttrValue(body, "BODY[]");
+        if (val.isEmpty()) val = fetchAttrValue(body, "RFC822");
+        if (!val.isEmpty()) { *out = val; return true; }
     }
-    mailimap_fetch_list_free(fetch_result);
 
-    if (payload.isEmpty()) {
-        m_lastError = QStringLiteral("Empty body for UID %1").arg(uid);
-        return false;
-    }
-    *out = payload;
-    return true;
+    setError(QStringLiteral("UID FETCH BODY.PEEK[]"),
+             QStringLiteral("Empty body for UID %1").arg(uid));
+    return false;
 }
 
 bool ImapClient::fetchHeader(quint32 uid, const QString &headerName, QString *out)
 {
-    if (!m_session || !out) return false;
+    if (!m_socket || !out) return false;
 
-    mailimap_set *set = mailimap_set_new_single(uid);
-    mailimap_fetch_type *fetch_type = mailimap_fetch_type_new_fetch_att_list_empty();
-
-    clist *header_list = clist_new();
-    char *hdrcopy = strdup(headerName.toUtf8().constData());
-    clist_append(header_list, hdrcopy);
-    mailimap_header_list *hdrs = mailimap_header_list_new(header_list);
-    mailimap_section *section = mailimap_section_new_header_fields(hdrs);
-    mailimap_fetch_type_new_fetch_att_list_add(
-        fetch_type, mailimap_fetch_att_new_body_peek_section(section));
-
-    clist *fetch_result = nullptr;
-    const int r = mailimap_uid_fetch(m_session, set, fetch_type, &fetch_result);
-    mailimap_set_free(set);
-    mailimap_fetch_type_free(fetch_type);
-    if (r != MAILIMAP_NO_ERROR) {
-        recordEtpanError(r, QStringLiteral("UID FETCH %1 HEADER.FIELDS").arg(uid));
+    const QByteArray hdr = headerName.toLatin1();
+    ImapResponse r = runCommand(
+        "UID FETCH " + QByteArray::number(uid)
+        + " (BODY.PEEK[HEADER.FIELDS (" + hdr + ")])");
+    if (!r.ok) {
+        setError(QStringLiteral("UID FETCH HEADER"), QString::fromLatin1(r.tagLine));
         return false;
     }
 
-    QString value;
-    for (clistiter *it = clist_begin(fetch_result); it; it = clist_next(it)) {
-        auto *msg = static_cast<mailimap_msg_att *>(clist_content(it));
-        value = readHeaderValue(clist_begin(msg->att_list), headerName);
-        if (!value.isEmpty()) break;
+    for (const QByteArray &line : r.untagged) {
+        if (!line.toUpper().contains(" FETCH ")) continue;
+        // The raw block may contain "BODY[HEADER.FIELDS (Name)] {N}\n<data>\n)"
+        const int litOpen  = line.indexOf('{');
+        const int litClose = line.indexOf('}', litOpen);
+        if (litOpen < 0 || litClose <= litOpen) continue;
+        bool ok;
+        int litLen = line.mid(litOpen + 1, litClose - litOpen - 1).toInt(&ok);
+        if (!ok || litLen <= 0) { *out = QString(); return true; }
+        int dataStart = litClose + 1;
+        if (dataStart < line.size() && line[dataStart] == '\n') ++dataStart;
+        const QByteArray raw = line.mid(dataStart, litLen);
+
+        const QByteArray needle = hdr + ':';
+        const int idx = raw.toLower().indexOf(needle.toLower());
+        if (idx < 0) { *out = QString(); return true; }
+        int end = raw.indexOf('\n', idx);
+        if (end < 0) end = raw.size();
+        *out = QString::fromUtf8(
+                   raw.mid(idx + needle.size(), end - idx - needle.size())
+               ).trimmed();
+        return true;
     }
-    mailimap_fetch_list_free(fetch_result);
-    *out = value;
+
+    *out = QString();
     return true;
 }
 
 bool ImapClient::appendMessage(const QString &folder,
-                               const QByteArray &rawMessage,
-                               quint32 *newUid)
+                                const QByteArray &rawMessage,
+                                quint32 *newUid)
 {
-    if (!m_session) return false;
-
-    if (newUid) *newUid = 0;
-
-    if (hasCapability(QStringLiteral("UIDPLUS"))) {
-        uint32_t uidvalidity = 0;
-        uint32_t out_uid = 0;
-        const int r = mailimap_uidplus_append(m_session,
-                                              folder.toUtf8().constData(),
-                                              nullptr,
-                                              nullptr,
-                                              rawMessage.constData(),
-                                              static_cast<size_t>(rawMessage.size()),
-                                              &uidvalidity,
-                                              &out_uid);
-        if (r != MAILIMAP_NO_ERROR) {
-            recordEtpanError(r, QStringLiteral("APPEND %1").arg(folder));
-            return false;
-        }
-        if (newUid) *newUid = out_uid;
-        return true;
-    }
-
-    const int r = mailimap_append(m_session,
-                                  folder.toUtf8().constData(),
-                                  nullptr,
-                                  nullptr,
-                                  rawMessage.constData(),
-                                  static_cast<size_t>(rawMessage.size()));
-    if (r != MAILIMAP_NO_ERROR) {
-        recordEtpanError(r, QStringLiteral("APPEND %1").arg(folder));
+    if (!m_socket) return false;
+    ImapResponse r = runAppend(folder, rawMessage, newUid);
+    if (!r.ok) {
+        setError(QStringLiteral("APPEND"), QString::fromLatin1(r.tagLine));
         return false;
     }
     return true;
@@ -446,29 +694,18 @@ bool ImapClient::appendMessage(const QString &folder,
 
 bool ImapClient::markDeletedAndExpunge(const QList<quint32> &uids)
 {
-    if (!m_session || uids.isEmpty()) return uids.isEmpty();
+    if (!m_socket) return uids.isEmpty();
+    if (uids.isEmpty()) return true;
 
-    mailimap_set *set = mailimap_set_new_empty();
-    for (quint32 uid : uids) {
-        mailimap_set_add_single(set, uid);
-    }
-
-    mailimap_flag_list *flag_list = mailimap_flag_list_new_empty();
-    mailimap_flag_list_add(flag_list, mailimap_flag_new_deleted());
-    mailimap_store_att_flags *store_atts = mailimap_store_att_flags_new_add_flags_silent(flag_list);
-
-    const int r = mailimap_uid_store(m_session, set, store_atts);
-    mailimap_set_free(set);
-    mailimap_store_att_flags_free(store_atts);
-
-    if (r != MAILIMAP_NO_ERROR) {
-        recordEtpanError(r, QStringLiteral("UID STORE \\Deleted"));
+    ImapResponse r = runCommand("UID STORE " + uidSet(uids)
+                                + " +FLAGS.SILENT (\\Deleted)");
+    if (!r.ok) {
+        setError(QStringLiteral("UID STORE \\Deleted"), QString::fromLatin1(r.tagLine));
         return false;
     }
-
-    const int er = mailimap_expunge(m_session);
-    if (er != MAILIMAP_NO_ERROR) {
-        recordEtpanError(er, QStringLiteral("EXPUNGE"));
+    ImapResponse er = runCommand("EXPUNGE");
+    if (!er.ok) {
+        setError(QStringLiteral("EXPUNGE"), QString::fromLatin1(er.tagLine));
         return false;
     }
     return true;
@@ -476,110 +713,109 @@ bool ImapClient::markDeletedAndExpunge(const QList<quint32> &uids)
 
 bool ImapClient::moveMessage(quint32 uid, const QString &destinationFolder)
 {
-    if (!m_session) return false;
+    if (!m_socket) return false;
+    const QByteArray us = QByteArray::number(uid);
 
-    mailimap_set *set = mailimap_set_new_single(uid);
-
-    // RFC 6851 MOVE — preferred when the server advertises it because it
-    // performs the copy and the source-side delete atomically.
     if (hasCapability(QStringLiteral("MOVE"))) {
-        const int r = mailimap_uid_move(m_session, set, destinationFolder.toUtf8().constData());
-        mailimap_set_free(set);
-        if (r != MAILIMAP_NO_ERROR) {
-            recordEtpanError(r, QStringLiteral("UID MOVE -> %1").arg(destinationFolder));
+        ImapResponse r = runCommand("UID MOVE " + us + " " + quotedMailbox(destinationFolder));
+        if (!r.ok) {
+            setError(QStringLiteral("UID MOVE"), QString::fromLatin1(r.tagLine));
             return false;
         }
         return true;
     }
 
-    const int rc = mailimap_uid_copy(m_session, set, destinationFolder.toUtf8().constData());
-    if (rc != MAILIMAP_NO_ERROR) {
-        mailimap_set_free(set);
-        recordEtpanError(rc, QStringLiteral("UID COPY -> %1").arg(destinationFolder));
-        return false;
-    }
+    // Fallback: COPY + STORE \Deleted + EXPUNGE
+    ImapResponse rc = runCommand("UID COPY " + us + " " + quotedMailbox(destinationFolder));
+    if (!rc.ok) { setError(QStringLiteral("UID COPY"), QString::fromLatin1(rc.tagLine)); return false; }
 
-    mailimap_flag_list *flag_list = mailimap_flag_list_new_empty();
-    mailimap_flag_list_add(flag_list, mailimap_flag_new_deleted());
-    mailimap_store_att_flags *store_atts = mailimap_store_att_flags_new_add_flags_silent(flag_list);
-    const int rs = mailimap_uid_store(m_session, set, store_atts);
-    mailimap_set_free(set);
-    mailimap_store_att_flags_free(store_atts);
-    if (rs != MAILIMAP_NO_ERROR) {
-        recordEtpanError(rs, QStringLiteral("UID STORE \\Deleted (fallback move)"));
-        return false;
-    }
+    ImapResponse rs = runCommand("UID STORE " + us + " +FLAGS.SILENT (\\Deleted)");
+    if (!rs.ok) { setError(QStringLiteral("UID STORE (move)"), QString::fromLatin1(rs.tagLine)); return false; }
 
-    const int re = mailimap_expunge(m_session);
-    if (re != MAILIMAP_NO_ERROR) {
-        recordEtpanError(re, QStringLiteral("EXPUNGE (fallback move)"));
-        return false;
-    }
+    ImapResponse re = runCommand("EXPUNGE");
+    if (!re.ok) { setError(QStringLiteral("EXPUNGE (move)"), QString::fromLatin1(re.tagLine)); return false; }
+
     return true;
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+//  IDLE  (RFC 2177)
+// ────────────────────────────────────────────────────────────────────────────
+
 bool ImapClient::waitForActivity(int maxSeconds)
 {
-    if (!m_session) return false;
+    if (!m_socket) return false;
     if (!hasCapability(QStringLiteral("IDLE"))) {
-        // No IDLE — caller falls back to interval polling.
         m_lastError = QStringLiteral("Server does not advertise IDLE");
         return false;
     }
-    if (!ensureCancelPipe()) {
-        m_lastError = QStringLiteral("Cannot create cancel pipe");
+
+    if (m_cancelPipe[0] == -1) {
+        if (::pipe(m_cancelPipe) != 0) {
+            m_lastError = QStringLiteral("Cannot create cancel pipe");
+            return false;
+        }
+        ::fcntl(m_cancelPipe[0], F_SETFL, O_NONBLOCK);
+        ::fcntl(m_cancelPipe[1], F_SETFL, O_NONBLOCK);
+    }
+
+    const QByteArray tag = nextTag();
+    m_socket->write(tag + " IDLE\r\n");
+    if (!m_socket->waitForBytesWritten(kWriteTimeoutMs)) {
+        setError(QStringLiteral("IDLE write"), m_socket->errorString());
         return false;
     }
 
-    const int r = mailimap_idle(m_session);
-    if (r != MAILIMAP_NO_ERROR) {
-        recordEtpanError(r, QStringLiteral("IDLE"));
+    // Read the "+" continuation
+    QByteArray plus = readPhysicalLine();
+    if (!plus.startsWith('+') && !plus.startsWith('*')) {
+        setError(QStringLiteral("IDLE"),
+                 QStringLiteral("Expected '+', got: ") + QString::fromLatin1(plus));
         return false;
     }
 
-    const int imapFd = mailimap_idle_get_fd(m_session);
+    const int imapFd   = static_cast<int>(m_socket->socketDescriptor());
     const int cancelFd = m_cancelPipe[0];
-    int nfds = (imapFd > cancelFd ? imapFd : cancelFd) + 1;
+    const int nfds     = qMax(imapFd, cancelFd) + 1;
 
     fd_set rfds;
     FD_ZERO(&rfds);
-    FD_SET(imapFd, &rfds);
+    FD_SET(imapFd,   &rfds);
     FD_SET(cancelFd, &rfds);
 
-    timeval tv;
-    tv.tv_sec = maxSeconds;
+    struct timeval tv;
+    tv.tv_sec  = maxSeconds;
     tv.tv_usec = 0;
 
     const int sel = ::select(nfds, &rfds, nullptr, nullptr, &tv);
 
-    // Drain the cancel pipe so the next IDLE starts clean.
     if (sel > 0 && FD_ISSET(cancelFd, &rfds)) {
         char drain[64];
         while (::read(cancelFd, drain, sizeof(drain)) > 0) {}
     }
 
-    const int done = mailimap_idle_done(m_session);
-    if (done != MAILIMAP_NO_ERROR) {
-        recordEtpanError(done, QStringLiteral("IDLE DONE"));
+    m_socket->write("DONE\r\n");
+    m_socket->waitForBytesWritten(kWriteTimeoutMs);
+
+    ImapResponse r = readResponse(tag);
+    if (!r.ok) {
+        setError(QStringLiteral("IDLE DONE"), QString::fromLatin1(r.tagLine));
         return false;
     }
 
-    if (sel < 0) {
-        m_lastError = QStringLiteral("select() failed during IDLE");
-        return false;
-    }
-    if (sel == 0) {
-        return false; // timeout
-    }
-    // Activity on the imap socket means the server pushed an untagged
-    // response (EXISTS/EXPUNGE/FETCH). The DONE roundtrip above already
-    // consumed and parsed it, so the caller should now refresh state.
-    return FD_ISSET(imapFd, &rfds);
+    if (sel < 0) { m_lastError = QStringLiteral("select() failed during IDLE"); return false; }
+    if (sel == 0) return false; // timeout
+
+    return FD_ISSET(imapFd, &rfds) != 0;
 }
 
 void ImapClient::cancelIdle()
 {
     if (m_cancelPipe[1] == -1) return;
     const char b = 'x';
-    ::write(m_cancelPipe[1], &b, 1);
+    // Suppress warn_unused_result: a failed write just means the IDLE loop
+    // will time out naturally instead of being cancelled early — acceptable.
+    if (::write(m_cancelPipe[1], &b, 1) < 0) {
+        qWarning() << "ImapClient: cancelIdle write failed";
+    }
 }

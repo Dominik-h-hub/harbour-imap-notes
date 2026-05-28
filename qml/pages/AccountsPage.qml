@@ -68,7 +68,7 @@ Page {
                 }
                 MenuItem {
                     text: qsTr("Remove account")
-                    onClicked: Remorse.itemAction(item, qsTr("Removing"), function() {
+                    onClicked: item.remorseAction(qsTr("Removing"), function() {
                         Accounts.removeAccount(model.accountId)
                     })
                 }

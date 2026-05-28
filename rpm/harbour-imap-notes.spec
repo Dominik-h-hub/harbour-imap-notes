@@ -8,7 +8,6 @@ URL:        https://github.com/Dominik-h-hub/harbour-imap-notes
 Source0:    %{name}-%{version}.tar.bz2
 Requires:   sailfishsilica-qt5 >= 0.10.9
 Requires:   qt5-qtsql-plugin-sqlite
-Requires:   libetpan
 BuildRequires:  pkgconfig(sailfishapp) >= 1.0.2
 BuildRequires:  pkgconfig(Qt5Core)
 BuildRequires:  pkgconfig(Qt5Qml)
@@ -16,7 +15,6 @@ BuildRequires:  pkgconfig(Qt5Quick)
 BuildRequires:  pkgconfig(Qt5Sql)
 BuildRequires:  pkgconfig(Qt5Network)
 BuildRequires:  pkgconfig(Qt5DBus)
-BuildRequires:  libetpan-devel
 BuildRequires:  desktop-file-utils
 
 %description
@@ -28,19 +26,21 @@ same on-wire format as the native iOS Notes app over IMAP.
 %setup -q -n %{name}-%{version}
 
 %build
+# The top-level harbour-imap-notes.pro is a SUBDIRS project that builds
+# both the app and the background-sync daemon in one pass.  This avoids
+# the mb2 shadow-build problem where "cd daemon" fails because the build
+# directory is separate from the source tree.
 %qmake5
 %make_build
-
-# Background sync daemon (separate binary, started by systemd --user).
-(cd daemon && %qmake5 daemon.pro && %make_build)
 
 
 %install
 %qmake5_install
-(cd daemon && make install INSTALL_ROOT=%{buildroot})
 
 
-desktop-file-install --delete-original         --dir %{buildroot}%{_datadir}/applications                %{buildroot}%{_datadir}/applications/*.desktop
+desktop-file-install --delete-original \
+    --dir %{buildroot}%{_datadir}/applications \
+    %{buildroot}%{_datadir}/applications/*.desktop
 
 %post
 # Reload systemd --user units. The daemon is enabled per-user via:

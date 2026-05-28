@@ -204,10 +204,15 @@ bool NotesDatabase::runSchemaV1()
         // Full-text search across title + body. Kept in sync with the notes
         // table via triggers below. Searches go against `notes_fts`; we filter
         // by account via a JOIN on notes.id.
+        //
+        // remove_diacritics 1 is safe on SQLite 3.7.4+; value 2 needs 3.27+.
+        // fts5 itself has been compiled into Mer/Sailfish SQLite since SFOS 3.x,
+        // but we handle its absence gracefully (full-text search is degraded,
+        // not fatal).
         QStringLiteral(
             "CREATE VIRTUAL TABLE notes_fts USING fts5("
             "  title, body, content='notes', content_rowid='id',"
-            "  tokenize='unicode61 remove_diacritics 2'"
+            "  tokenize='unicode61 remove_diacritics 1'"
             ")"),
 
         QStringLiteral(
@@ -229,8 +234,16 @@ bool NotesDatabase::runSchemaV1()
 
     for (const QString &statement : ddl) {
         if (!q.exec(statement)) {
-            qWarning() << "Schema v1 failed:" << q.lastError().text() << "\n" << statement;
-            return false;
+            // FTS5 virtual table and its triggers are optional: if the SQLite
+            // build on this device doesn't include fts5, skip them with a
+            // warning instead of aborting the whole migration.  The search
+            // feature will be degraded (falls back to LIKE queries) but the
+            // rest of the app works normally.
+            const bool isFts = statement.contains(QStringLiteral("notes_fts"), Qt::CaseInsensitive);
+            qWarning() << (isFts ? "Schema v1 FTS5 (optional) failed — search degraded:"
+                                 : "Schema v1 failed:")
+                       << q.lastError().text();
+            if (!isFts) return false;
         }
     }
     return true;

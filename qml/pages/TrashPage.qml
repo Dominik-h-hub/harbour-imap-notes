@@ -6,7 +6,7 @@ Page {
     id: page
     allowedOrientations: Orientation.All
 
-    property qint64 accountId: -1
+    property var accountId: -1
 
     Component.onCompleted: {
         var trashId = Notes.trashFolderIdFor(accountId)
@@ -39,8 +39,8 @@ Page {
                 }
                 MenuItem {
                     text: qsTr("Delete forever")
-                    onClicked: Remorse.itemAction(trashItem, qsTr("Deleting"),
-                                                  function() { Notes.deleteNotePermanently(model.noteId) })
+                    onClicked: trashItem.remorseAction(qsTr("Deleting"),
+                                                       function() { Notes.deleteNotePermanently(model.noteId) })
                 }
             }
 

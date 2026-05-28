@@ -5,6 +5,8 @@
 #include "notemessage.h"
 
 #include <QDateTime>
+#include <QDir>
+#include <QFileInfo>
 #include <QHash>
 #include <QSet>
 #include <QSettings>
@@ -14,6 +16,22 @@
 #include <QUuid>
 #include <QVariant>
 #include <QtDebug>
+
+// Qt 5.8 introduced currentSecsSinceEpoch / toSecsSinceEpoch /
+// fromSecsSinceEpoch.  The Sailfish OS 5 SDK ships an older Qt5 build, so we
+// provide thin wrappers that fall back to the millisecond-precision variants.
+static qint64 currentSecs()
+{
+    return QDateTime::currentMSecsSinceEpoch() / 1000;
+}
+static qint64 toSecs(const QDateTime &dt)
+{
+    return dt.toMSecsSinceEpoch() / 1000;
+}
+static QDateTime fromSecs(qint64 s)
+{
+    return QDateTime::fromMSecsSinceEpoch(s * qint64(1000));
+}
 
 namespace {
 
@@ -60,6 +78,10 @@ SyncWorker::SyncWorker(const QString &dbPath, QObject *parent)
 SyncWorker::~SyncWorker()
 {
     if (m_db.isOpen()) m_db.close();
+    // Release our handle *before* calling removeDatabase, otherwise Qt prints
+    // "connection is still in use" because the QSqlDatabase copy we hold counts
+    // as an open reference.
+    m_db = QSqlDatabase();
     if (QSqlDatabase::contains(m_connectionName)) {
         QSqlDatabase::removeDatabase(m_connectionName);
     }
@@ -68,11 +90,40 @@ SyncWorker::~SyncWorker()
 void SyncWorker::initialize()
 {
     if (m_initialized) return;
-    m_connectionName = currentConnectionName();
+
+    // Connection name is stable for the lifetime of this thread.
+    if (m_connectionName.isEmpty())
+        m_connectionName = currentConnectionName();
+
+    // Ensure the storage directory exists.  The main app (NotesDatabase) also
+    // does this, but the daemon may start before the app on first launch.
+    const QFileInfo fi(m_dbPath);
+    if (!QDir().mkpath(fi.absolutePath())) {
+        qWarning() << "SyncWorker: cannot create data directory" << fi.absolutePath();
+        return;
+    }
+
+    // Wait for the main app to create and migrate the DB schema.  We only open
+    // an existing file; we never create or migrate the schema ourselves.
+    if (!QFile::exists(m_dbPath)) {
+        qInfo() << "SyncWorker: database not yet created, will retry on next sync";
+        return;
+    }
+
+    // Close and remove any stale connection left over from a previous failed
+    // attempt (avoids the "duplicate connection name" Qt warning and the
+    // subsequent "out of memory" SQLite error on the stale handle).
+    if (QSqlDatabase::contains(m_connectionName)) {
+        m_db = QSqlDatabase(); // drop our copy first
+        QSqlDatabase::removeDatabase(m_connectionName);
+    }
+
     m_db = QSqlDatabase::addDatabase(QStringLiteral("QSQLITE"), m_connectionName);
     m_db.setDatabaseName(m_dbPath);
     if (!m_db.open()) {
         qWarning() << "SyncWorker: cannot open" << m_dbPath << m_db.lastError().text();
+        m_db = QSqlDatabase();
+        QSqlDatabase::removeDatabase(m_connectionName);
         return;
     }
     QSqlQuery pragma(m_db);
@@ -125,7 +176,7 @@ void SyncWorker::markAccountStatus(qint64 accountId,
     q.prepare(QStringLiteral(
         "UPDATE accounts SET last_sync = :ts, sync_status = :st, last_error = :err"
         " WHERE id = :id"));
-    q.bindValue(QStringLiteral(":ts"), QDateTime::currentSecsSinceEpoch());
+    q.bindValue(QStringLiteral(":ts"), currentSecs());
     q.bindValue(QStringLiteral(":st"), status);
     q.bindValue(QStringLiteral(":err"), error);
     q.bindValue(QStringLiteral(":id"), accountId);
@@ -369,7 +420,7 @@ bool SyncWorker::pushTombstones(ImapClient &c, const AccountRow &acc)
             c.fetchHeader(serverUid, QStringLiteral("X-Last-Modified"), &remoteLastMod);
             const QDateTime remoteDt = QDateTime::fromString(remoteLastMod, Qt::ISODate);
             if (remoteDt.isValid()
-                && remoteDt.toSecsSinceEpoch() > deletedAt) {
+                && toSecs(remoteDt) > deletedAt) {
                 QSqlQuery drop(m_db);
                 drop.prepare(QStringLiteral("DELETE FROM tombstones WHERE uuid = :u"));
                 drop.bindValue(QStringLiteral(":u"), uuid);
@@ -424,8 +475,8 @@ bool SyncWorker::pushDirtyNotes(ImapClient &c, const AccountRow &acc)
         p.title = dirty.value(2).toString();
         p.bodyHtml = dirty.value(3).toString();
         p.format = dirty.value(4).toString();
-        p.created = QDateTime::fromSecsSinceEpoch(dirty.value(5).toLongLong());
-        p.modified = QDateTime::fromSecsSinceEpoch(dirty.value(6).toLongLong());
+        p.created = fromSecs(dirty.value(5).toLongLong());
+        p.modified = fromSecs(dirty.value(6).toLongLong());
         p.serverUid = dirty.value(7).toUInt();
         p.folderPath = dirty.value(8).toString();
         pending.append(p);
@@ -517,7 +568,7 @@ bool SyncWorker::pullFolder(ImapClient &c, const AccountRow &acc,
         if (byUuid.next()) {
             const qint64 existingId = byUuid.value(0).toLongLong();
             const qint64 existingMod = byUuid.value(1).toLongLong();
-            const qint64 remoteMod = parsed.lastModified.toSecsSinceEpoch();
+            const qint64 remoteMod = toSecs(parsed.lastModified);
             if (remoteMod >= existingMod) {
                 QSqlQuery upd(m_db);
                 upd.prepare(QStringLiteral(
@@ -537,9 +588,9 @@ bool SyncWorker::pullFolder(ImapClient &c, const AccountRow &acc,
         }
 
         const qint64 created = parsed.created.isValid()
-            ? parsed.created.toSecsSinceEpoch() : QDateTime::currentSecsSinceEpoch();
+            ? toSecs(parsed.created) : currentSecs();
         const qint64 lastMod = parsed.lastModified.isValid()
-            ? parsed.lastModified.toSecsSinceEpoch() : created;
+            ? toSecs(parsed.lastModified) : created;
 
         QSqlQuery ins(m_db);
         ins.prepare(QStringLiteral(
@@ -582,7 +633,7 @@ void SyncWorker::runTrashCleanup(const AccountRow &acc)
     const int days = store.value(QStringLiteral("trash/cleanupDays"), 30).toInt();
     if (days <= 0) return; // 0 = keep forever
 
-    const qint64 cutoff = QDateTime::currentSecsSinceEpoch() - qint64(days) * 24 * 3600;
+    const qint64 cutoff = currentSecs() - qint64(days) * 24 * 3600;
 
     QSqlQuery q(m_db);
     q.prepare(QStringLiteral(

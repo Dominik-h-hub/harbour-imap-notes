@@ -5,7 +5,7 @@ Dialog {
     id: page
     allowedOrientations: Orientation.All
 
-    property qint64 accountId: -1
+    property var accountId: -1
     readonly property bool isNew: accountId < 0
 
     canAccept: displayNameField.text.length > 0

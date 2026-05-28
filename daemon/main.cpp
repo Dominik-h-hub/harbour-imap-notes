@@ -46,7 +46,10 @@ int main(int argc, char *argv[])
     QThread thread;
     SyncWorker *worker = new SyncWorker(dbPath);
     worker->moveToThread(&thread);
-    QObject::connect(&thread, &QThread::started, worker, &SyncWorker::initialize);
+    // Do NOT connect thread.started → worker.initialize here.
+    // syncAccount() calls initialize() lazily, so it only runs after the
+    // 5-second warm-up delay, by which time the main app has had a chance to
+    // create the database file and apply migrations.
     QObject::connect(&thread, &QThread::finished, worker, &QObject::deleteLater);
     thread.start();
 

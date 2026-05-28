@@ -6,7 +6,7 @@ Page {
     id: page
     allowedOrientations: Orientation.All
 
-    property qint64 accountId: -1
+    property var accountId: -1
 
     // The model picks up account scope through its folder filter. For a real
     // multi-account search we pass a sentinel folder belonging to this account

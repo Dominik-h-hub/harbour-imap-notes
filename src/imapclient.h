@@ -7,12 +7,12 @@
 #include <QSet>
 #include <QString>
 
-// Forward declaration so consumers don't pull in <libetpan/libetpan.h>.
-struct mailimap;
+class QSslSocket;
 
-// Synchronous wrapper around libetpan's IMAP session API. All public methods
-// block while talking to the server, so an instance must run on a worker
-// thread (the sync engine owns one ImapClient per account on its own QThread).
+// Synchronous wrapper around QSslSocket that speaks IMAP4rev1.
+// All public methods block while talking to the server, so an instance must
+// run on a worker thread (the sync engine owns one ImapClient per account on
+// its own QThread).
 //
 // The class is intentionally low-level: it covers the IMAP verbs we need and
 // keeps higher-level decisions — what to fetch, how to merge with the local
@@ -49,9 +49,7 @@ public:
     void disconnectFromHost();
     bool isConnected() const;
 
-    // Capabilities reported by the server after login. Used by the sync
-    // engine to fall back to plain COPY+STORE+EXPUNGE when MOVE is missing,
-    // skip CONDSTORE/QRESYNC paths, etc.
+    // Capabilities reported by the server after login.
     bool hasCapability(const QString &name) const;
 
     // ----- folder ops -----
@@ -71,26 +69,14 @@ public:
     bool fetchFullMessage(quint32 uid, QByteArray *out);
     bool fetchHeader(quint32 uid, const QString &headerName, QString *out);
 
-    // On UIDPLUS-capable servers the new UID is reported back via *newUid.
-    // Otherwise *newUid is left as 0 and the caller must look the message up
-    // by its X-Universally-Unique-Identifier on the next sync pass.
     bool appendMessage(const QString &folder,
                        const QByteArray &rawMessage,
                        quint32 *newUid = nullptr);
 
     bool markDeletedAndExpunge(const QList<quint32> &uids);
-    // Uses IMAP MOVE when available, otherwise COPY + STORE \Deleted + EXPUNGE.
     bool moveMessage(quint32 uid, const QString &destinationFolder);
 
     // ----- IDLE (RFC 2177) -----
-    //
-    // Enters IDLE on the currently selected folder and blocks until the
-    // server sends any untagged response (EXISTS / EXPUNGE / FETCH) or until
-    // `cancelIdle()` is called from another thread. Returns true when activity
-    // is detected, false on timeout/cancel/error.
-    //
-    // `maxSeconds` defaults to 25 minutes per RFC 2177's recommendation —
-    // servers may drop the connection after ~30 min of inactivity.
     bool waitForActivity(int maxSeconds = 25 * 60);
     void cancelIdle();
 
@@ -101,18 +87,36 @@ signals:
     void error(const QString &message);
 
 private:
-    bool refreshCapabilities();
-    void recordEtpanError(int code, const QString &context);
-    bool ensureCancelPipe();
-    void closeCancelPipe();
-    QString currentDelimiter() const { return m_hierarchyDelimiter; }
+    // Low-level I/O
+    QByteArray readPhysicalLine();
+    QByteArray readBytes(int n);
 
-    struct mailimap *m_session = nullptr;
-    QString m_lastError;
-    QString m_selectedFolder;
-    QString m_hierarchyDelimiter = QStringLiteral("/");
+    // Mid-level response handling
+    struct ImapResponse {
+        QList<QByteArray> untagged; // lines/blocks starting with '*'
+        QByteArray        tagLine;  // the TAG OK/NO/BAD line
+        bool              ok = false;
+    };
+    ImapResponse readResponse(const QByteArray &tag);
+
+    // Command helpers
+    QByteArray   nextTag();
+    ImapResponse runCommand(const QByteArray &cmdWithoutTag);
+    // For APPEND-style commands that need a continuation (+) before sending data
+    ImapResponse runAppend(const QString &folder,
+                           const QByteArray &rawMessage,
+                           quint32 *newUid);
+
+    bool refreshCapabilities();
+    void setError(const QString &context, const QString &detail = {});
+
+    QSslSocket   *m_socket = nullptr;
+    quint32       m_tagCounter = 0;
+    QString       m_lastError;
+    QString       m_selectedFolder;
+    QString       m_hierarchyDelimiter = QStringLiteral("/");
     QSet<QString> m_capabilities;
-    int m_cancelPipe[2] = { -1, -1 };
+    int           m_cancelPipe[2] = { -1, -1 };
 };
 
 #endif

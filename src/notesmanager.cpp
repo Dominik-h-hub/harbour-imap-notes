@@ -9,6 +9,23 @@
 #include <QVariant>
 #include <QtDebug>
 
+// ── Qt version compatibility ─────────────────────────────────────────────────
+// currentSecsSinceEpoch() and QUuid::WithoutBraces were added in Qt 5.8/5.11.
+// The Sailfish OS 5 SDK ships an older Qt5 build, so provide equivalents.
+static qint64 currentSecs()
+{
+    return QDateTime::currentMSecsSinceEpoch() / 1000;
+}
+// Returns a UUID string without surrounding braces, e.g.
+//   "550e8400-e29b-41d4-a716-446655440000"
+static QString createUuidString()
+{
+    // QUuid::toString() always returns "{xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}"
+    // Strip the leading '{' and trailing '}'.
+    return QUuid::createUuid().toString().mid(1, 36).toUpper();
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 NotesManager::NotesManager(NotesDatabase *db, QObject *parent)
     : QObject(parent)
     , m_db(db)
@@ -56,8 +73,8 @@ qint64 NotesManager::createNote(qint64 folderId,
     }
     const qint64 accountId = accountLookup.value(0).toLongLong();
 
-    const qint64 now = QDateTime::currentSecsSinceEpoch();
-    const QString uuid = QUuid::createUuid().toString(QUuid::WithoutBraces).toUpper();
+    const qint64 now = currentSecs();
+    const QString uuid = createUuidString();
 
     QSqlQuery q(m_db->database());
     q.prepare(QStringLiteral(
@@ -86,7 +103,7 @@ bool NotesManager::updateNote(qint64 noteId,
                               const QString &bodyHtml,
                               const QString &format)
 {
-    const qint64 now = QDateTime::currentSecsSinceEpoch();
+    const qint64 now = currentSecs();
     QSqlQuery q(m_db->database());
     q.prepare(QStringLiteral(
         "UPDATE notes SET title = :title, body_html = :body, format = :format,"
@@ -154,7 +171,7 @@ bool NotesManager::moveToTrash(qint64 noteId)
         " last_modified = :mod WHERE id = :id"));
     upd.bindValue(QStringLiteral(":trash"), trashId);
     upd.bindValue(QStringLiteral(":id"), noteId);
-    upd.bindValue(QStringLiteral(":mod"), QDateTime::currentSecsSinceEpoch());
+    upd.bindValue(QStringLiteral(":mod"), currentSecs());
     if (!upd.exec()) {
         qWarning() << "moveToTrash:" << upd.lastError().text();
         return false;
@@ -170,7 +187,7 @@ bool NotesManager::moveToTrash(qint64 noteId)
     ts.bindValue(QStringLiteral(":uuid"), uuid);
     ts.bindValue(QStringLiteral(":a"), accountId);
     ts.bindValue(QStringLiteral(":path"), sourcePath);
-    ts.bindValue(QStringLiteral(":at"), QDateTime::currentSecsSinceEpoch());
+    ts.bindValue(QStringLiteral(":at"), currentSecs());
     ts.bindValue(QStringLiteral(":uid"), serverUid);
     ts.exec();
 
@@ -214,7 +231,7 @@ bool NotesManager::restoreFromTrash(qint64 noteId)
         " last_modified = :mod WHERE id = :id"));
     upd.bindValue(QStringLiteral(":target"), targetFolderId);
     upd.bindValue(QStringLiteral(":id"), noteId);
-    upd.bindValue(QStringLiteral(":mod"), QDateTime::currentSecsSinceEpoch());
+    upd.bindValue(QStringLiteral(":mod"), currentSecs());
     if (!upd.exec()) {
         return false;
     }
@@ -253,7 +270,7 @@ bool NotesManager::deleteNotePermanently(qint64 noteId)
     ts.bindValue(QStringLiteral(":uuid"), uuid);
     ts.bindValue(QStringLiteral(":a"), accountId);
     ts.bindValue(QStringLiteral(":path"), folderPath);
-    ts.bindValue(QStringLiteral(":at"), QDateTime::currentSecsSinceEpoch());
+    ts.bindValue(QStringLiteral(":at"), currentSecs());
     ts.bindValue(QStringLiteral(":uid"), serverUid);
     if (!ts.exec()) {
         db.rollback();
@@ -280,7 +297,7 @@ bool NotesManager::moveNote(qint64 noteId, qint64 targetFolderId)
         " last_modified = :mod WHERE id = :id"));
     q.bindValue(QStringLiteral(":target"), targetFolderId);
     q.bindValue(QStringLiteral(":id"), noteId);
-    q.bindValue(QStringLiteral(":mod"), QDateTime::currentSecsSinceEpoch());
+    q.bindValue(QStringLiteral(":mod"), currentSecs());
     if (!q.exec()) {
         return false;
     }

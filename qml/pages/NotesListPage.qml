@@ -6,9 +6,9 @@ Page {
     id: page
     allowedOrientations: Orientation.All
 
-    property qint64 folderId: -1
+    property var folderId: -1
     property string folderName
-    property qint64 accountId: -1
+    property var accountId: -1
 
     Component.onCompleted: notesModel.folderId = folderId
 
@@ -63,8 +63,8 @@ Page {
                 }
                 MenuItem {
                     text: qsTr("Move to trash")
-                    onClicked: Remorse.itemAction(noteItem, qsTr("Deleting"),
-                                                  function() { Notes.moveToTrash(model.noteId) })
+                    onClicked: noteItem.remorseAction(qsTr("Deleting"),
+                                                      function() { Notes.moveToTrash(model.noteId) })
                 }
             }
 

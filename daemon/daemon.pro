@@ -6,13 +6,6 @@ CONFIG += c++14
 QT += core network sql
 QT -= gui
 
-CONFIG += link_pkgconfig
-packagesExist(libetpan) {
-    PKGCONFIG += libetpan
-} else {
-    LIBS += -letpan
-}
-
 INCLUDEPATH += $$PWD/../src
 
 SOURCES += \

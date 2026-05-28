@@ -70,8 +70,10 @@ QByteArray base64Wrap(const QByteArray &raw)
 
 QString sanitizedUuid()
 {
-    QString s = QUuid::createUuid().toString(QUuid::WithoutBraces);
-    return s.toUpper();
+    // QUuid::WithoutBraces was added in Qt 5.11.  Strip the surrounding braces
+    // manually to stay compatible with the Qt 5.6 build that ships with
+    // Sailfish OS 5.
+    return QUuid::createUuid().toString().mid(1, 36).toUpper();
 }
 
 // Headers are case-insensitive. Lower-case lookup helper.

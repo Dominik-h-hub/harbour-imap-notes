@@ -5,7 +5,7 @@ Page {
     id: page
     allowedOrientations: Orientation.All
 
-    property qint64 accountId: -1
+    property var accountId: -1
     property string accountName
 
     Component.onCompleted: foldersModel.accountId = accountId
@@ -76,7 +76,7 @@ Page {
                 }
                 MenuItem {
                     text: qsTr("Delete folder")
-                    onClicked: Remorse.itemAction(item, qsTr("Deleting"),
+                    onClicked: item.remorseAction(qsTr("Deleting"),
                                                   function() { Notes.deleteFolder(model.folderId) })
                 }
             }

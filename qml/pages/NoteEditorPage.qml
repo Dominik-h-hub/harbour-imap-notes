@@ -7,8 +7,8 @@ Page {
     id: page
     allowedOrientations: Orientation.All
 
-    property qint64 noteId: -1
-    property qint64 folderId: -1
+    property var noteId: -1
+    property var folderId: -1
     property string format: "rich"
     property bool dirty: false
     readonly property bool richMode: format === "rich"
@@ -114,9 +114,14 @@ Page {
                 id: bodyArea
                 width: parent.width
                 placeholderText: qsTr("Start typing…")
-                textFormat: page.richMode ? TextEdit.RichText : TextEdit.PlainText
                 wrapMode: TextEdit.Wrap
                 onTextChanged: page.dirty = true
+
+                Binding {
+                    target: bodyArea._editor
+                    property: "textFormat"
+                    value: page.richMode ? TextEdit.RichText : TextEdit.PlainText
+                }
             }
 
             Label {

@@ -2,6 +2,73 @@
 <!DOCTYPE TS>
 <TS version="2.1" language="de_DE">
 <context>
+    <name>AccountEditPage</name>
+    <message>
+        <source>Add</source>
+        <translation>Hinzufügen</translation>
+    </message>
+    <message>
+        <source>Save</source>
+        <translation>Speichern</translation>
+    </message>
+    <message>
+        <source>Display name</source>
+        <translation>Anzeigename</translation>
+    </message>
+    <message>
+        <source>e.g. Personal Mail</source>
+        <translation>z. B. Privatpost</translation>
+    </message>
+    <message>
+        <source>IMAP server</source>
+        <translation>IMAP-Server</translation>
+    </message>
+    <message>
+        <source>Port</source>
+        <translation>Port</translation>
+    </message>
+    <message>
+        <source>Connection security</source>
+        <translation>Verbindungssicherheit</translation>
+    </message>
+    <message>
+        <source>SSL / TLS (implicit)</source>
+        <translation>SSL / TLS (implizit)</translation>
+    </message>
+    <message>
+        <source>STARTTLS</source>
+        <translation>STARTTLS</translation>
+    </message>
+    <message>
+        <source>Username</source>
+        <translation>Benutzername</translation>
+    </message>
+    <message>
+        <source>Password</source>
+        <translation>Passwort</translation>
+    </message>
+    <message>
+        <source>Password (leave empty to keep)</source>
+        <translation>Passwort (leer lassen zum Beibehalten)</translation>
+    </message>
+    <message>
+        <source>Notes folder on server</source>
+        <translation>Notizen-Ordner am Server</translation>
+    </message>
+    <message>
+        <source>Testing…</source>
+        <translation>Wird getestet…</translation>
+    </message>
+    <message>
+        <source>Test connection</source>
+        <translation>Verbindung testen</translation>
+    </message>
+    <message>
+        <source>imap.example.org</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
     <name>AccountsPage</name>
     <message>
         <source>Accounts</source>
@@ -65,6 +132,192 @@
     <message>
         <source>Idle</source>
         <translation>Bereit</translation>
+    </message>
+    <message>
+        <source>Syncing…</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>FolderEditDialog</name>
+    <message>
+        <source>Folder</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>OK</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Folder name</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>FoldersPage</name>
+    <message>
+        <source>Folders</source>
+        <translation>Ordner</translation>
+    </message>
+    <message>
+        <source>Search this account</source>
+        <translation>In diesem Konto suchen</translation>
+    </message>
+    <message>
+        <source>Recently deleted</source>
+        <translation>Zuletzt gelöscht</translation>
+    </message>
+    <message>
+        <source>New folder</source>
+        <translation>Neuer Ordner</translation>
+    </message>
+    <message>
+        <source>Rename folder</source>
+        <translation>Ordner umbenennen</translation>
+    </message>
+    <message>
+        <source>Delete folder</source>
+        <translation>Ordner löschen</translation>
+    </message>
+    <message>
+        <source>Deleting</source>
+        <translation>Wird gelöscht</translation>
+    </message>
+    <message>
+        <source>Sync this account</source>
+        <translation type="unfinished">Dieses Konto synchronisieren</translation>
+    </message>
+    <message>
+        <source>No folders yet</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Pull down to sync or create one</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>NoteEditorPage</name>
+    <message>
+        <source>New note</source>
+        <translation>Neue Notiz</translation>
+    </message>
+    <message>
+        <source>Edit note</source>
+        <translation>Notiz bearbeiten</translation>
+    </message>
+    <message>
+        <source>Title</source>
+        <translation>Titel</translation>
+    </message>
+    <message>
+        <source>Start typing…</source>
+        <translation>Tippen, um zu beginnen…</translation>
+    </message>
+    <message>
+        <source>Switch to plain text</source>
+        <translation>Zu Klartext wechseln</translation>
+    </message>
+    <message>
+        <source>Switch to rich text</source>
+        <translation>Zu Rich-Text wechseln</translation>
+    </message>
+    <message>
+        <source>Attach file</source>
+        <translation>Datei anhängen</translation>
+    </message>
+    <message>
+        <source>Switch</source>
+        <translation>Wechseln</translation>
+    </message>
+    <message>
+        <source>Keep rich</source>
+        <translation>Rich-Text behalten</translation>
+    </message>
+    <message>
+        <source>Switching to plain text will drop bold, italic, headings and other formatting. iOS edits sent later will arrive as plain text too.</source>
+        <translation>Beim Wechsel zu Klartext gehen Fett, Kursiv, Überschriften und andere Formatierungen verloren. Spätere iOS-Bearbeitungen kommen ebenfalls als Klartext an.</translation>
+    </message>
+    <message>
+        <source>Pick a folder via Settings → Default folder before saving.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Save</source>
+        <translation type="unfinished">Speichern</translation>
+    </message>
+    <message>
+        <source>Attachment picker wires up in a follow-up.</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>NoteListItem</name>
+    <message>
+        <source>(no title)</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>NotesListPage</name>
+    <message>
+        <source>Notes</source>
+        <translation>Notizen</translation>
+    </message>
+    <message>
+        <source>Search</source>
+        <translation>Suche</translation>
+    </message>
+    <message>
+        <source>Sync</source>
+        <translation>Synchronisieren</translation>
+    </message>
+    <message>
+        <source>New note</source>
+        <translation>Neue Notiz</translation>
+    </message>
+    <message>
+        <source>Pinned</source>
+        <translation>Angeheftet</translation>
+    </message>
+    <message>
+        <source>Pin to top</source>
+        <translation>Oben anheften</translation>
+    </message>
+    <message>
+        <source>Unpin</source>
+        <translation>Lösen</translation>
+    </message>
+    <message>
+        <source>Move to trash</source>
+        <translation>In Papierkorb verschieben</translation>
+    </message>
+    <message>
+        <source>No notes yet</source>
+        <translation>Noch keine Notizen</translation>
+    </message>
+    <message>
+        <source>Pull down to create one</source>
+        <translation>Ziehe nach unten, um eine zu erstellen</translation>
+    </message>
+    <message>
+        <source>Deleting</source>
+        <translation type="unfinished">Wird gelöscht</translation>
+    </message>
+</context>
+<context>
+    <name>SearchPage</name>
+    <message>
+        <source>Search</source>
+        <translation>Suche</translation>
+    </message>
+    <message>
+        <source>Search notes</source>
+        <translation>Notizen durchsuchen</translation>
+    </message>
+    <message>
+        <source>No matches</source>
+        <translation>Keine Treffer</translation>
     </message>
 </context>
 <context>
@@ -151,183 +404,25 @@
     </message>
 </context>
 <context>
-    <name>AccountEditPage</name>
+    <name>SyncStatusIndicator</name>
     <message>
-        <source>Add</source>
-        <translation>Hinzufügen</translation>
-    </message>
-    <message>
-        <source>Save</source>
-        <translation>Speichern</translation>
-    </message>
-    <message>
-        <source>Display name</source>
-        <translation>Anzeigename</translation>
-    </message>
-    <message>
-        <source>e.g. Personal Mail</source>
-        <translation>z. B. Privatpost</translation>
-    </message>
-    <message>
-        <source>IMAP server</source>
-        <translation>IMAP-Server</translation>
-    </message>
-    <message>
-        <source>Port</source>
-        <translation>Port</translation>
-    </message>
-    <message>
-        <source>Connection security</source>
-        <translation>Verbindungssicherheit</translation>
-    </message>
-    <message>
-        <source>SSL / TLS (implicit)</source>
-        <translation>SSL / TLS (implizit)</translation>
-    </message>
-    <message>
-        <source>STARTTLS</source>
-        <translation>STARTTLS</translation>
-    </message>
-    <message>
-        <source>Username</source>
-        <translation>Benutzername</translation>
-    </message>
-    <message>
-        <source>Password</source>
-        <translation>Passwort</translation>
-    </message>
-    <message>
-        <source>Password (leave empty to keep)</source>
-        <translation>Passwort (leer lassen zum Beibehalten)</translation>
-    </message>
-    <message>
-        <source>Notes folder on server</source>
-        <translation>Notizen-Ordner am Server</translation>
-    </message>
-    <message>
-        <source>Testing…</source>
-        <translation>Wird getestet…</translation>
-    </message>
-    <message>
-        <source>Test connection</source>
-        <translation>Verbindung testen</translation>
+        <source>never</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
-    <name>FoldersPage</name>
+    <name>SyncWorker</name>
     <message>
-        <source>Folders</source>
-        <translation>Ordner</translation>
+        <source>Account not found</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Search this account</source>
-        <translation>In diesem Konto suchen</translation>
+        <source>Connection OK. Notes folder will be created on first sync.</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Recently deleted</source>
-        <translation>Zuletzt gelöscht</translation>
-    </message>
-    <message>
-        <source>New folder</source>
-        <translation>Neuer Ordner</translation>
-    </message>
-    <message>
-        <source>Rename folder</source>
-        <translation>Ordner umbenennen</translation>
-    </message>
-    <message>
-        <source>Delete folder</source>
-        <translation>Ordner löschen</translation>
-    </message>
-    <message>
-        <source>Deleting</source>
-        <translation>Wird gelöscht</translation>
-    </message>
-</context>
-<context>
-    <name>NotesListPage</name>
-    <message>
-        <source>Notes</source>
-        <translation>Notizen</translation>
-    </message>
-    <message>
-        <source>Search</source>
-        <translation>Suche</translation>
-    </message>
-    <message>
-        <source>Sync</source>
-        <translation>Synchronisieren</translation>
-    </message>
-    <message>
-        <source>New note</source>
-        <translation>Neue Notiz</translation>
-    </message>
-    <message>
-        <source>Pinned</source>
-        <translation>Angeheftet</translation>
-    </message>
-    <message>
-        <source>Pin to top</source>
-        <translation>Oben anheften</translation>
-    </message>
-    <message>
-        <source>Unpin</source>
-        <translation>Lösen</translation>
-    </message>
-    <message>
-        <source>Move to trash</source>
-        <translation>In Papierkorb verschieben</translation>
-    </message>
-    <message>
-        <source>No notes yet</source>
-        <translation>Noch keine Notizen</translation>
-    </message>
-    <message>
-        <source>Pull down to create one</source>
-        <translation>Ziehe nach unten, um eine zu erstellen</translation>
-    </message>
-</context>
-<context>
-    <name>NoteEditorPage</name>
-    <message>
-        <source>New note</source>
-        <translation>Neue Notiz</translation>
-    </message>
-    <message>
-        <source>Edit note</source>
-        <translation>Notiz bearbeiten</translation>
-    </message>
-    <message>
-        <source>Title</source>
-        <translation>Titel</translation>
-    </message>
-    <message>
-        <source>Start typing…</source>
-        <translation>Tippen, um zu beginnen…</translation>
-    </message>
-    <message>
-        <source>Switch to plain text</source>
-        <translation>Zu Klartext wechseln</translation>
-    </message>
-    <message>
-        <source>Switch to rich text</source>
-        <translation>Zu Rich-Text wechseln</translation>
-    </message>
-    <message>
-        <source>Attach file</source>
-        <translation>Datei anhängen</translation>
-    </message>
-    <message>
-        <source>Switch</source>
-        <translation>Wechseln</translation>
-    </message>
-    <message>
-        <source>Keep rich</source>
-        <translation>Rich-Text behalten</translation>
-    </message>
-    <message>
-        <source>Switching to plain text will drop bold, italic, headings and other formatting. iOS edits sent later will arrive as plain text too.</source>
-        <translation>Beim Wechsel zu Klartext gehen Fett, Kursiv, Überschriften und andere Formatierungen verloren. Spätere iOS-Bearbeitungen kommen ebenfalls als Klartext an.</translation>
+        <source>Connection OK</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
@@ -344,27 +439,17 @@
         <source>Notes you delete will appear here for 30 days</source>
         <translation>Gelöschte Notizen erscheinen hier für 30 Tage</translation>
     </message>
-</context>
-<context>
-    <name>SearchPage</name>
     <message>
-        <source>Search</source>
-        <translation>Suche</translation>
+        <source>Restore</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Search notes</source>
-        <translation>Notizen durchsuchen</translation>
+        <source>Delete forever</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>No matches</source>
-        <translation>Keine Treffer</translation>
-    </message>
-</context>
-<context>
-    <name>SyncEngine</name>
-    <message>
-        <source>IMAP client not implemented yet</source>
-        <translation>IMAP-Client noch nicht implementiert</translation>
+        <source>Deleting</source>
+        <translation type="unfinished">Wird gelöscht</translation>
     </message>
 </context>
 </TS>
