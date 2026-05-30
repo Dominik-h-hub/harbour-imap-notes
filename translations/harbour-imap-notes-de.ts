@@ -108,6 +108,13 @@
     </message>
 </context>
 <context>
+    <name>ChecklistBlock</name>
+    <message>
+        <source>List item</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
     <name>CoverPage</name>
     <message>
         <source>IMAP Notes</source>
@@ -235,10 +242,6 @@
         <translation>Rich-Text behalten</translation>
     </message>
     <message>
-        <source>Switching to plain text will drop bold, italic, headings and other formatting. iOS edits sent later will arrive as plain text too.</source>
-        <translation>Beim Wechsel zu Klartext gehen Fett, Kursiv, Überschriften und andere Formatierungen verloren. Spätere iOS-Bearbeitungen kommen ebenfalls als Klartext an.</translation>
-    </message>
-    <message>
         <source>Pick a folder via Settings → Default folder before saving.</source>
         <translation type="unfinished"></translation>
     </message>
@@ -248,6 +251,18 @@
     </message>
     <message>
         <source>Attachment picker wires up in a follow-up.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Tap into a text area first.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Checklists show on iOS as a bullet list with ☐/☑ — taps to toggle only work here on Sailfish.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <source>Switching to plain text will drop bold, italic, headings and other formatting. Checklists become ☐/☑ text lines. iOS edits sent later will arrive as plain text too.</source>
         <translation type="unfinished"></translation>
     </message>
 </context>

@@ -87,19 +87,38 @@ void NotesModel::reload()
     QSqlQuery q(m_db->database());
     if (!m_searchQuery.isEmpty()) {
         // Pinned-first ordering breaks for search results — search returns a
-        // flat ranked list ordered by FTS relevance. The QML layer can still
-        // visualise pinned notes via the role.
-        q.prepare(QStringLiteral(
-            "SELECT n.id, n.uuid, n.title, n.body_html, n.last_modified, n.pinned, n.format, n.folder_id "
-            "FROM notes n JOIN notes_fts f ON f.rowid = n.id "
-            "WHERE notes_fts MATCH :query AND n.folder_id IN ("
-            "  SELECT id FROM folders WHERE account_id = ("
-            "    SELECT account_id FROM folders WHERE id = :folder"
-            "  )"
-            ") "
-            "ORDER BY rank"));
-        q.bindValue(QStringLiteral(":query"), m_searchQuery);
-        q.bindValue(QStringLiteral(":folder"), m_folderId);
+        // flat ranked list ordered by FTS relevance (or by last_modified
+        // when FTS5 is unavailable and we fall back to LIKE).
+        if (ftsAvailable()) {
+            q.prepare(QStringLiteral(
+                "SELECT n.id, n.uuid, n.title, n.body_html, n.last_modified, n.pinned, n.format, n.folder_id "
+                "FROM notes n JOIN notes_fts f ON f.rowid = n.id "
+                "WHERE notes_fts MATCH :query AND n.folder_id IN ("
+                "  SELECT id FROM folders WHERE account_id = ("
+                "    SELECT account_id FROM folders WHERE id = :folder"
+                "  )"
+                ") "
+                "ORDER BY rank"));
+            q.bindValue(QStringLiteral(":query"), m_searchQuery);
+            q.bindValue(QStringLiteral(":folder"), m_folderId);
+        } else {
+            // FTS5 missing on this device. Degrade to a case-insensitive
+            // substring search over title + body. We use LIKE with explicit
+            // wildcards so the search term is data-bound (no injection risk).
+            q.prepare(QStringLiteral(
+                "SELECT n.id, n.uuid, n.title, n.body_html, n.last_modified, n.pinned, n.format, n.folder_id "
+                "FROM notes n "
+                "WHERE (n.title LIKE :q OR n.body_html LIKE :q) "
+                "  AND n.folder_id IN ("
+                "    SELECT id FROM folders WHERE account_id = ("
+                "      SELECT account_id FROM folders WHERE id = :folder"
+                "    )"
+                "  ) "
+                "ORDER BY n.last_modified DESC"));
+            q.bindValue(QStringLiteral(":q"),
+                        QStringLiteral("%%1%").arg(m_searchQuery));
+            q.bindValue(QStringLiteral(":folder"), m_folderId);
+        }
     } else {
         // Pinned section first (within pinned still sorted by last_modified
         // DESC), then the rest.
@@ -128,6 +147,26 @@ void NotesModel::reload()
     }
 
     endResetModel();
+}
+
+bool NotesModel::ftsAvailable() const
+{
+    if (m_ftsAvailable >= 0) {
+        return m_ftsAvailable == 1;
+    }
+    // sqlite_master is always present; query for the virtual table the
+    // schema migration *tried* to create. If it's there, FTS5 was compiled
+    // in and we use MATCH-based search. Otherwise we fall back to LIKE.
+    QSqlQuery q(m_db->database());
+    q.prepare(QStringLiteral(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'notes_fts'"));
+    if (q.exec() && q.next()) {
+        m_ftsAvailable = 1;
+    } else {
+        m_ftsAvailable = 0;
+        qWarning() << "NotesModel: notes_fts virtual table missing — search degraded to LIKE";
+    }
+    return m_ftsAvailable == 1;
 }
 
 bool NotesModel::togglePinned(qint64 noteId)

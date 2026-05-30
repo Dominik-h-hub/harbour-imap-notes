@@ -56,10 +56,13 @@ private:
         qint64 folderId;
     };
 
+    bool ftsAvailable() const;
+
     NotesDatabase *m_db;
     qint64 m_folderId = -1;
     QString m_searchQuery;
     QVector<Row> m_rows;
+    mutable int m_ftsAvailable = -1; // -1 unknown, 0 no, 1 yes
 };
 
 #endif

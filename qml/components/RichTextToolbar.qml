@@ -13,7 +13,7 @@ Row {
     signal toggleUnderline()
     signal toggleHeading()
     signal insertBullet()
-    signal insertCheckbox()
+    signal insertChecklist()
     signal attachFile()
 
     property bool richMode: true
@@ -25,7 +25,7 @@ Row {
             { glyph: "U",  signalName: "toggleUnderline", underline: true },
             { glyph: "H",  signalName: "toggleHeading",   bold: true },
             { glyph: "•",  signalName: "insertBullet" },
-            { glyph: "☐",  signalName: "insertCheckbox" },
+            { glyph: "☐",  signalName: "insertChecklist" },
             { glyph: "📎", signalName: "attachFile" },
         ]
         delegate: IconButton {
@@ -51,7 +51,7 @@ Row {
                 case "toggleUnderline": toolbar.toggleUnderline(); break
                 case "toggleHeading":   toolbar.toggleHeading(); break
                 case "insertBullet":    toolbar.insertBullet(); break
-                case "insertCheckbox":  toolbar.insertCheckbox(); break
+                case "insertChecklist":  toolbar.insertChecklist(); break
                 case "attachFile":      toolbar.attachFile(); break
                 }
             }

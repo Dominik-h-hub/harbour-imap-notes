@@ -34,7 +34,8 @@ SOURCES += \
     src/syncengine.cpp \
     src/syncworker.cpp \
     src/networkmonitor.cpp \
-    src/richtextconverter.cpp
+    src/richtextconverter.cpp \
+    src/checklistparser.cpp
 
 HEADERS += \
     src/notesdatabase.h \
@@ -51,7 +52,8 @@ HEADERS += \
     src/syncengine.h \
     src/syncworker.h \
     src/networkmonitor.h \
-    src/richtextconverter.h
+    src/richtextconverter.h \
+    src/checklistparser.h
 
 DISTFILES += \
     qml/harbour-imap-notes.qml \
@@ -65,6 +67,7 @@ DISTFILES += \
     qml/pages/SearchPage.qml \
     qml/pages/SettingsPage.qml \
     qml/pages/TrashPage.qml \
+    qml/components/ChecklistBlock.qml \
     qml/components/NoteListItem.qml \
     qml/components/RichTextToolbar.qml \
     qml/components/SyncStatusIndicator.qml \

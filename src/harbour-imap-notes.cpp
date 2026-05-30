@@ -12,6 +12,7 @@
 
 #include "accountsmanager.h"
 #include "accountsmodel.h"
+#include "checklistparser.h"
 #include "foldersmodel.h"
 #include "networkmonitor.h"
 #include "notesdatabase.h"
@@ -71,6 +72,8 @@ int main(int argc, char *argv[])
 
     qmlRegisterSingletonType<RichTextConverter>("harbour.imapnotes", 1, 0, "RichText",
         [](QQmlEngine *, QJSEngine *) -> QObject * { return new RichTextConverter; });
+    qmlRegisterSingletonType<ChecklistParser>("harbour.imapnotes", 1, 0, "Checklist",
+        [](QQmlEngine *, QJSEngine *) -> QObject * { return new ChecklistParser; });
 
     view->setSource(SailfishApp::pathToMainQml());
     view->show();

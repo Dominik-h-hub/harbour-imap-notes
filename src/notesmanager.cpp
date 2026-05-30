@@ -1,5 +1,6 @@
 #include "notesmanager.h"
 
+#include "checklistparser.h"
 #include "notesdatabase.h"
 
 #include <QDateTime>
@@ -59,6 +60,15 @@ QVariantMap NotesManager::note(qint64 noteId) const
     return m;
 }
 
+// Sorting happens at save time per requirements §6.4: any imap-checklist <ul>
+// in the body has its done items moved to the end so the server copy matches
+// the iOS-Notes "checked items sink" UX without rewriting the HTML on every
+// tap.
+static QString sortChecklistsForSave(const QString &bodyHtml)
+{
+    return ChecklistParser::sortDoneItems(bodyHtml);
+}
+
 qint64 NotesManager::createNote(qint64 folderId,
                                 const QString &title,
                                 const QString &bodyHtml,
@@ -86,7 +96,7 @@ qint64 NotesManager::createNote(qint64 folderId,
     q.bindValue(QStringLiteral(":account"), accountId);
     q.bindValue(QStringLiteral(":folder"), folderId);
     q.bindValue(QStringLiteral(":title"), title);
-    q.bindValue(QStringLiteral(":body"), bodyHtml);
+    q.bindValue(QStringLiteral(":body"), sortChecklistsForSave(bodyHtml));
     q.bindValue(QStringLiteral(":format"), format);
     q.bindValue(QStringLiteral(":created"), now);
     q.bindValue(QStringLiteral(":modified"), now);
@@ -110,7 +120,7 @@ bool NotesManager::updateNote(qint64 noteId,
         " last_modified = :modified, locally_dirty = 1 WHERE id = :id"));
     q.bindValue(QStringLiteral(":id"), noteId);
     q.bindValue(QStringLiteral(":title"), title);
-    q.bindValue(QStringLiteral(":body"), bodyHtml);
+    q.bindValue(QStringLiteral(":body"), sortChecklistsForSave(bodyHtml));
     q.bindValue(QStringLiteral(":format"), format);
     q.bindValue(QStringLiteral(":modified"), now);
     if (!q.exec()) {
