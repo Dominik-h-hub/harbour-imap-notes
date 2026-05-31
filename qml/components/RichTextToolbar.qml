@@ -25,6 +25,7 @@ Row {
     property bool underlineActive: false
     property bool headingActive:   false
     property bool bulletActive:    false
+    property bool checklistActive: false
 
     // Calculate button size so all 7 buttons fit in the available width
     readonly property int _buttonCount: 7
@@ -57,6 +58,7 @@ Row {
                 if (modelData.signalName === "toggleUnderline") return toolbar.underlineActive
                 if (modelData.signalName === "toggleHeading")   return toolbar.headingActive
                 if (modelData.signalName === "insertBullet")    return toolbar.bulletActive
+                if (modelData.signalName === "insertChecklist") return toolbar.checklistActive
                 return false
             }
 

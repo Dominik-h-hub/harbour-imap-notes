@@ -255,82 +255,83 @@
 <context>
     <name>NoteEditorPage</name>
     <message>
-        <location filename="../qml/pages/NoteEditorPage.qml" line="69"/>
+        <location filename="../qml/pages/NoteEditorPage.qml" line="70"/>
         <source>Pick a folder via Settings → Default folder before saving.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/NoteEditorPage.qml" line="119"/>
-        <location filename="../qml/pages/NoteEditorPage.qml" line="178"/>
-        <location filename="../qml/pages/NoteEditorPage.qml" line="215"/>
-        <location filename="../qml/pages/NoteEditorPage.qml" line="230"/>
+        <location filename="../qml/pages/NoteEditorPage.qml" line="122"/>
+        <location filename="../qml/pages/NoteEditorPage.qml" line="181"/>
+        <location filename="../qml/pages/NoteEditorPage.qml" line="218"/>
+        <location filename="../qml/pages/NoteEditorPage.qml" line="262"/>
+        <location filename="../qml/pages/NoteEditorPage.qml" line="287"/>
         <source>Tap into a text area first.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/NoteEditorPage.qml" line="329"/>
+        <location filename="../qml/pages/NoteEditorPage.qml" line="460"/>
         <source>Save</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/NoteEditorPage.qml" line="334"/>
+        <location filename="../qml/pages/NoteEditorPage.qml" line="465"/>
         <source>Switch to plain text</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/NoteEditorPage.qml" line="335"/>
+        <location filename="../qml/pages/NoteEditorPage.qml" line="466"/>
         <source>Switch to rich text</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/NoteEditorPage.qml" line="349"/>
+        <location filename="../qml/pages/NoteEditorPage.qml" line="478"/>
         <source>Attach file</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/NoteEditorPage.qml" line="351"/>
-        <location filename="../qml/pages/NoteEditorPage.qml" line="395"/>
+        <location filename="../qml/pages/NoteEditorPage.qml" line="480"/>
+        <location filename="../qml/pages/NoteEditorPage.qml" line="634"/>
         <source>Attachment picker wires up in a follow-up.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/NoteEditorPage.qml" line="366"/>
+        <location filename="../qml/pages/NoteEditorPage.qml" line="495"/>
         <source>New note</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/NoteEditorPage.qml" line="366"/>
+        <location filename="../qml/pages/NoteEditorPage.qml" line="495"/>
         <source>Edit note</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/NoteEditorPage.qml" line="372"/>
+        <location filename="../qml/pages/NoteEditorPage.qml" line="501"/>
         <source>Title</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/NoteEditorPage.qml" line="489"/>
+        <location filename="../qml/pages/NoteEditorPage.qml" line="653"/>
         <source>Switching to plain text will drop bold, italic, headings and other formatting. Checklists become ☐/☑ text lines. iOS edits sent later will arrive as plain text too.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/NoteEditorPage.qml" line="277"/>
-        <location filename="../qml/pages/NoteEditorPage.qml" line="431"/>
+        <location filename="../qml/pages/NoteEditorPage.qml" line="343"/>
+        <location filename="../qml/pages/NoteEditorPage.qml" line="547"/>
         <source>Start typing…</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/NoteEditorPage.qml" line="462"/>
+        <location filename="../qml/pages/NoteEditorPage.qml" line="575"/>
         <source>Checklists show on iOS as a bullet list with ☐/☑ — taps to toggle only work here on Sailfish.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/NoteEditorPage.qml" line="477"/>
+        <location filename="../qml/pages/NoteEditorPage.qml" line="641"/>
         <source>Switch</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/pages/NoteEditorPage.qml" line="478"/>
+        <location filename="../qml/pages/NoteEditorPage.qml" line="642"/>
         <source>Keep rich</source>
         <translation type="unfinished"></translation>
     </message>

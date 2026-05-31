@@ -31,6 +31,7 @@ Page {
     property bool formatUnderline: false
     property bool formatHeading:   false
     property bool formatBullet:    false
+    property bool formatChecklist: false
 
     function _refresh() {
         // Reassign a sliced copy so the Repeater notices the structural change.
@@ -70,8 +71,10 @@ Page {
                 return
             }
             noteId = Notes.createNote(folderId, titleField.text, body, format)
+            console.log("[NotesEditor] Saved new note - ID: " + noteId);
         } else {
             Notes.updateNote(noteId, titleField.text, body, format)
+            console.log("[NotesEditor] Note updated: " + noteId);
         }
         dirty = false
     }
@@ -222,6 +225,35 @@ Page {
         dirty = true
     }
 
+    // Scroll the Flickable so the active cursor is never hidden behind the
+    // virtual keyboard. Called from every TextEdit's onCursorRectangleChanged.
+    // Qt.inputMethod.keyboardRectangle gives the keyboard size on Sailfish OS
+    // (the keyboard overlays the page without resizing it).
+    function ensureCursorVisible() {
+        if (!focusedTextArea) return
+        var cursorRect = focusedTextArea.cursorRectangle
+        var mapped = focusedTextArea.mapToItem(flickable.contentItem, 0, cursorRect.y)
+        var cursorTop    = mapped.y
+        var cursorBottom = mapped.y + cursorRect.height
+
+        // Keyboard height in screen pixels (0 when keyboard is hidden).
+        var kbHeight = Qt.inputMethod.keyboardRectangle.height
+        // Effective visible height of the flickable above the keyboard.
+        var visibleH = flickable.height - kbHeight
+
+        var visibleTop    = flickable.contentY
+        var visibleBottom = flickable.contentY + visibleH
+
+        var margin = Theme.paddingMedium
+        if (cursorBottom > visibleBottom - margin) {
+            var newY = cursorBottom - visibleH + margin
+            flickable.contentY = Math.max(0,
+                Math.min(newY, flickable.contentHeight - visibleH))
+        } else if (cursorTop < visibleTop + margin) {
+            flickable.contentY = Math.max(0, cursorTop - margin)
+        }
+    }
+
     // Toggle bullet-list mode. First press inserts a <ul><li> and lights up
     // the button; second press inserts a normal-style span to break out of
     // the list, and the button goes dark again.
@@ -246,59 +278,156 @@ Page {
         dirty = true
     }
 
+    // Toggle checklist mode. First press inserts ☐ at the start of a new line;
+    // while active, pressing Enter auto-inserts ☐ on each new line.
+    // Tapping ☐/☑ in the text toggles the item (handled by the MouseArea overlay
+    // inside textBlockComp). Second press of the button deactivates the mode.
+    function applyChecklist() {
+        if (!focusedTextArea) {
+            statusLabel.text = qsTr("Tap into a text area first.")
+            return
+        }
+        var ed = focusedTextArea
+        var wasActive = page.formatChecklist
+        page.formatChecklist = !wasActive
+
+        if (!wasActive) {
+            var pos = ed.cursorPosition
+            // Ensure ☐ starts on its own line. If the character immediately
+            // before the cursor is not a paragraph/line separator, prepend \n.
+            var prevCh = pos > 0 ? ed.getText(pos - 1, pos) : "\n"
+            var prefix = (prevCh !== "\n") ? "\n" : ""
+            ed.insert(pos, prefix + "☐ ")
+            ed.cursorPosition = pos + prefix.length + 2
+            dirty = true
+        }
+        // Deactivating: just flip the flag — no extra text needed.
+        ed.forceActiveFocus()
+    }
+
     Component.onCompleted: loadNote()
     Component.onDestruction: saveNote()
 
     // ── Delegate components ─────────────────────────────────────────────
     Component {
         id: textBlockComp
-        // Use QML's native TextEdit directly so textFormat, insert(),
-        // selectionStart/End etc. are all accessible without private _editor hacks.
-        TextEdit {
-            id: textBlock
+        // Outer Item exposes the properties the Loader sets (_loading, blockIndex,
+        // text). The inner TextEdit holds the actual editor; the MouseArea overlay
+        // intercepts taps on ☐/☑ glyphs so they can be toggled without opening
+        // the keyboard.
+        Item {
+            id: blockWrapper
             property int blockIndex: -1
-            // Guard flag: suppress onTextChanged side-effects while loading
             property bool _loading: false
+            property alias text: ed.text
 
             width: column.width
-            textFormat: TextEdit.RichText
-            wrapMode: TextEdit.Wrap
-            color: Theme.primaryColor
-            selectionColor: Theme.highlightBackgroundColor
-            selectedTextColor: Theme.highlightColor
-            font.pixelSize: Theme.fontSizeSmall
-            cursorVisible: activeFocus
+            implicitHeight: ed.implicitHeight
 
-            // Placeholder text — shown when the block is empty
-            Text {
-                anchors.fill: parent
-                visible: textBlock.text.length === 0 && !textBlock.activeFocus
-                         && textBlock.blockIndex === 0 && page.blocks.length === 1
-                text: qsTr("Start typing…")
-                color: Theme.secondaryColor
-                font: textBlock.font
+            TextEdit {
+                id: ed
+                width: parent.width
+                textFormat: TextEdit.RichText
+                wrapMode: TextEdit.Wrap
+                color: Theme.primaryColor
+                selectionColor: Theme.highlightBackgroundColor
+                selectedTextColor: Theme.highlightColor
+                font.pixelSize: Theme.fontSizeSmall
+                cursorVisible: activeFocus
+
+                // Placeholder — shown when the only block is empty
+                Text {
+                    anchors.fill: parent
+                    visible: ed.text.length === 0 && !ed.activeFocus
+                             && blockWrapper.blockIndex === 0 && page.blocks.length === 1
+                    text: qsTr("Start typing…")
+                    color: Theme.secondaryColor
+                    font: ed.font
+                }
+
+                onTextChanged: {
+                    if (blockWrapper._loading) return
+                    if (blockWrapper.blockIndex < 0 || blockWrapper.blockIndex >= page.blocks.length) return
+                    if (page.blocks[blockWrapper.blockIndex].type !== "text") return
+                    if (page.blocks[blockWrapper.blockIndex].html === ed.text) return
+                    page.blocks[blockWrapper.blockIndex].html = ed.text
+                    page.dirty = true
+                }
+
+                onActiveFocusChanged: {
+                    if (activeFocus) {
+                        page.focusedTextArea = ed
+                        page.focusedBlockIndex = blockWrapper.blockIndex
+                        // Reset all format-toggle flags — we don't know the
+                        // character style at the new cursor position.
+                        page.formatBold      = false
+                        page.formatItalic    = false
+                        page.formatUnderline = false
+                        page.formatHeading   = false
+                        page.formatBullet    = false
+                        page.formatChecklist = false
+                    }
+                }
+
+                // Keep the cursor visible when typing (auto-scroll above keyboard).
+                onCursorRectangleChanged: {
+                    if (activeFocus) page.ensureCursorVisible()
+                }
+
+                // While checklist mode is active, auto-insert ☐ at the start
+                // of each new line so the user doesn't have to press the button
+                // again for every item.
+                Keys.onPressed: {
+                    if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+                            && page.formatChecklist) {
+                        // Let TextEdit create the paragraph break first, then
+                        // insert the ☐ prefix. Qt.callLater is not available on
+                        // all Sailfish Qt builds, so we use a single-shot Timer.
+                        checklistContinueTimer.restart()
+                        // event.accepted stays false → TextEdit handles Enter normally
+                    }
+                }
+
+                // Single-shot timer used instead of Qt.callLater for compatibility.
+                Timer {
+                    id: checklistContinueTimer
+                    interval: 0
+                    repeat: false
+                    onTriggered: {
+                        var pos = ed.cursorPosition
+                        ed.insert(pos, "☐ ")
+                        ed.cursorPosition = pos + 2
+                    }
+                }
             }
 
-            onTextChanged: {
-                if (_loading) return
-                if (blockIndex < 0 || blockIndex >= page.blocks.length) return
-                if (page.blocks[blockIndex].type !== "text") return
-                if (page.blocks[blockIndex].html === text) return
-                page.blocks[blockIndex].html = text
-                page.dirty = true
-            }
-            onActiveFocusChanged: {
-                if (activeFocus) {
-                    page.focusedTextArea = textBlock
-                    page.focusedBlockIndex = blockIndex
-                    // Reset format-toggle state when the user taps into a new
-                    // block — we don't know the character format at the new
-                    // cursor position, so start clean.
-                    page.formatBold      = false
-                    page.formatItalic    = false
-                    page.formatUnderline = false
-                    page.formatHeading   = false
-                    page.formatBullet    = false
+            // Tap-to-toggle overlay: when the user taps a ☐ or ☑ glyph, toggle
+            // it. All other taps propagate to the TextEdit for normal interaction.
+            MouseArea {
+                anchors.fill: ed
+                propagateComposedEvents: true
+
+                // Decide immediately on press whether we own this event.
+                // Only accept presses that land on a checkbox glyph; everything
+                // else is forwarded to the TextEdit so it can gain focus and
+                // show the virtual keyboard.
+                onPressed: {
+                    var charPos = ed.positionAt(mouse.x, mouse.y)
+                    var ch = ed.getText(charPos, charPos + 1)
+                    mouse.accepted = (ch === "☐" || ch === "☑")
+                }
+
+                // Fires only for presses we accepted (i.e. checkbox glyphs).
+                onClicked: {
+                    var charPos = ed.positionAt(mouse.x, mouse.y)
+                    var ch = ed.getText(charPos, charPos + 1)
+                    if (ch === "☐" || ch === "☑") {
+                        var newCh = (ch === "☐") ? "☑" : "☐"
+                        ed.remove(charPos, charPos + 1)
+                        ed.insert(charPos, newCh)
+                        ed.cursorPosition = charPos + 1
+                        page.dirty = true
+                    }
                 }
             }
         }
@@ -320,7 +449,9 @@ Page {
         }
     }
 
+    // ── Full-page flickable (pull-down reachable from screen top) ──────────
     SilicaFlickable {
+        id: flickable
         anchors.fill: parent
         contentHeight: column.implicitHeight + 2 * Theme.paddingLarge
 
@@ -337,8 +468,6 @@ Page {
                     if (page.richMode) {
                         formatWarningDialog.open()
                     } else {
-                        // Plain → Rich: re-parse glyphs back into structured
-                        // checklists. Done silently per requirements §5.4.
                         page.blocks = Checklist.plaintextToBlocks(plainArea.text)
                         page.format = "rich"
                         page.dirty = true
@@ -374,25 +503,12 @@ Page {
                 onTextChanged: page.dirty = true
             }
 
-            RichTextToolbar {
-                richMode: page.richMode
-                boldActive:      page.formatBold
-                italicActive:    page.formatItalic
-                underlineActive: page.formatUnderline
-                headingActive:   page.formatHeading
-                bulletActive:    page.formatBullet
-                onToggleBold:      page.applyInlineFormat("b")
-                onToggleItalic:    page.applyInlineFormat("i")
-                onToggleUnderline: page.applyInlineFormat("u")
-                onToggleHeading:   page.applyHeading()
-                onInsertBullet:    page.applyBullet()
-                onInsertChecklist: {
-                    var idx = page.focusedBlockIndex
-                    if (idx < 0) idx = page.blocks.length - 1
-                    page.insertChecklistAfter(idx)
-                }
-                onAttachFile: statusLabel.text =
-                    qsTr("Attachment picker wires up in a follow-up.")
+            // Invisible placeholder that reserves the toolbar's height in the
+            // content flow. The real toolbar floats above as an overlay.
+            Item {
+                id: toolbarPlaceholder
+                width: parent.width
+                height: stickyToolbar.implicitHeight + Theme.paddingSmall
             }
 
             // ── Rich-mode block stack ───────────────────────────────────
@@ -410,14 +526,14 @@ Page {
                         sourceComponent: modelData && modelData.type === "checklist"
                                          ? checklistBlockComp : textBlockComp
                         onLoaded: {
-                            item._loading = true
                             item.blockIndex = index
                             if (modelData.type === "checklist") {
                                 item.initialItems = modelData.items || []
                             } else {
+                                item._loading = true
                                 item.text = modelData.html || ""
+                                item._loading = false
                             }
-                            item._loading = false
                         }
                     }
                 }
@@ -430,7 +546,6 @@ Page {
                 visible: !page.richMode
                 placeholderText: qsTr("Start typing…")
                 wrapMode: TextEdit.Wrap
-
 
                 onTextChanged: {
                     if (!page.richMode) page.dirty = true
@@ -451,8 +566,6 @@ Page {
                 font.pixelSize: Theme.fontSizeExtraSmall
             }
 
-            // Tiny hint shown the first time a note contains a checklist —
-            // explains the iOS-side read-only trade-off per requirements §5.3.
             Label {
                 width: parent.width
                 wrapMode: Text.Wrap
@@ -468,6 +581,57 @@ Page {
                     return false
                 }
             }
+        }
+    }
+
+    // ── Floating sticky toolbar ─────────────────────────────────────────────
+    // Follows the toolbarPlaceholder in the content until the user scrolls
+    // past the title field — then it sticks at the top of the page.
+    // The background Rectangle prevents scrolled text from showing through.
+    Item {
+        id: toolbarFloat
+        z: 10
+        x: 0
+        width: parent.width
+        height: stickyToolbar.implicitHeight + Theme.paddingSmall
+        // Reactive y: re-evaluated whenever flickable.contentY changes.
+        // Math.max(0, …) clamps the toolbar at the page top when scrolled.
+        y: {
+            void flickable.contentY  // reactive dependency on scroll position
+            return Math.max(0, toolbarPlaceholder.mapToItem(page, 0, 0).y)
+        }
+
+        // Page-background-colored backdrop so scrolled content doesn't bleed through.
+        // Only shown when the toolbar is actually in sticky mode (at the top).
+        Rectangle {
+            anchors.fill: parent
+            color: Theme.overlayBackgroundColor
+            visible: toolbarFloat.y <= 0
+        }
+
+        RichTextToolbar {
+            id: stickyToolbar
+            anchors {
+                left: parent.left; right: parent.right
+                verticalCenter: parent.verticalCenter
+                leftMargin: Theme.horizontalPageMargin
+                rightMargin: Theme.horizontalPageMargin
+            }
+            richMode: page.richMode
+            boldActive:      page.formatBold
+            italicActive:    page.formatItalic
+            underlineActive: page.formatUnderline
+            headingActive:   page.formatHeading
+            bulletActive:    page.formatBullet
+            checklistActive: page.formatChecklist
+            onToggleBold:      page.applyInlineFormat("b")
+            onToggleItalic:    page.applyInlineFormat("i")
+            onToggleUnderline: page.applyInlineFormat("u")
+            onToggleHeading:   page.applyHeading()
+            onInsertBullet:    page.applyBullet()
+            onInsertChecklist: page.applyChecklist()
+            onAttachFile: statusLabel.text =
+                qsTr("Attachment picker wires up in a follow-up.")
         }
     }
 
