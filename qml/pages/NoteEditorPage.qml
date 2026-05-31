@@ -23,6 +23,15 @@ Page {
     property var focusedTextArea: null
     property int focusedBlockIndex: -1
 
+    // Active-format toggle state — true means "next typed chars use this style".
+    // Buttons show as highlighted when the corresponding flag is true.
+    // Reset whenever the user taps into a (different) TextEdit block.
+    property bool formatBold:      false
+    property bool formatItalic:    false
+    property bool formatUnderline: false
+    property bool formatHeading:   false
+    property bool formatBullet:    false
+
     function _refresh() {
         // Reassign a sliced copy so the Repeater notices the structural change.
         blocks = blocks.slice()
@@ -97,26 +106,143 @@ Page {
         dirty = true
     }
 
+    // Apply / remove an inline HTML tag (b / i / u).
+    //
+    // State is tracked via page.formatBold / formatItalic / formatUnderline.
+    // First press: activates the format (button highlights, next typed chars are
+    //              styled).
+    // Second press: deactivates — inserts a zero-width space with an explicit
+    //              "reset" span so the cursor inherits the normal style.
+    // With a selection: wraps (or unwraps) the selected text; flag state toggles.
+    function applyInlineFormat(tag) {
+        if (!focusedTextArea) {
+            statusLabel.text = qsTr("Tap into a text area first.")
+            return
+        }
+        var ed = focusedTextArea
+
+        // Read current state and toggle it.
+        var wasActive
+        var normalStyle
+        if (tag === "b") {
+            wasActive = page.formatBold
+            page.formatBold = !wasActive
+            normalStyle = "font-weight:normal"
+        } else if (tag === "i") {
+            wasActive = page.formatItalic
+            page.formatItalic = !wasActive
+            normalStyle = "font-style:normal"
+        } else if (tag === "u") {
+            wasActive = page.formatUnderline
+            page.formatUnderline = !wasActive
+            normalStyle = "text-decoration:none"
+        } else {
+            wasActive = false
+            normalStyle = ""
+        }
+
+        var s = ed.selectionStart
+        var e = ed.selectionEnd
+        if (s < e) {
+            var sel = ed.selectedText
+            ed.remove(s, e)
+            if (!wasActive) {
+                ed.insert(s, "<" + tag + ">" + sel + "</" + tag + ">")
+            } else {
+                // Strip the tag — re-insert as plain text.
+                ed.insert(s, sel)
+            }
+            ed.cursorPosition = s + sel.length
+        } else {
+            var pos = ed.cursorPosition
+            if (!wasActive) {
+                // Activate: anchor a bold/italic/underline zero-width space;
+                // cursor at pos+1 inherits that character's format.
+                ed.insert(pos, "<" + tag + ">\u200B</" + tag + ">")
+            } else {
+                // Deactivate: anchor an explicitly reset zero-width space;
+                // cursor at pos+1 inherits the "normal" style.
+                ed.insert(pos, "<span style=\"" + normalStyle + "\">\u200B</span>")
+            }
+            ed.cursorPosition = pos + 1
+        }
+        ed.forceActiveFocus()
+        dirty = true
+    }
+
+    // Wrap selected text in an <h2>, or insert an <h2> block with a
+    // zero-width-space placeholder so the cursor lands inside the heading.
+    // Second press resets to normal paragraph style.
+    function applyHeading() {
+        if (!focusedTextArea) {
+            statusLabel.text = qsTr("Tap into a text area first.")
+            return
+        }
+        var ed = focusedTextArea
+        var wasActive = page.formatHeading
+        page.formatHeading = !wasActive
+
+        var s = ed.selectionStart
+        var e = ed.selectionEnd
+        if (s < e) {
+            var sel = ed.selectedText
+            ed.remove(s, e)
+            if (!wasActive) {
+                ed.insert(s, "<h2>" + sel + "</h2>")
+            } else {
+                // Remove heading — re-insert as plain text
+                ed.insert(s, sel)
+            }
+            ed.cursorPosition = s + sel.length
+        } else {
+            var pos = ed.cursorPosition
+            if (!wasActive) {
+                // Activate heading: anchor a h2 zero-width space; cursor inherits heading style
+                ed.insert(pos, "<h2>\u200B</h2>")
+            } else {
+                // Deactivate: anchor a normal-style zero-width space to break out of heading
+                ed.insert(pos, "<span style=\"font-size:medium;font-weight:normal\">\u200B</span>")
+            }
+            ed.cursorPosition = pos + 1
+        }
+        ed.forceActiveFocus()
+        dirty = true
+    }
+
+    // Insert an arbitrary HTML snippet (bullet list, etc.) at the cursor.
     function insertHtmlAtCursor(snippet) {
         if (!focusedTextArea) {
             statusLabel.text = qsTr("Tap into a text area first.")
             return
         }
-        // Silica's TextArea wraps a private TextEdit (_editor). The wrapper
-        // doesn't forward insert(); we have to call it on the inner editor.
-        // In RichText mode the snippet is parsed as HTML; in PlainText mode
-        // it's inserted literally (but the toolbar is disabled there anyway).
-        var editor = focusedTextArea._editor
-        if (editor && typeof editor.insert === "function") {
-            editor.insert(editor.cursorPosition, snippet)
-        } else {
-            // Defensive fallback: splice into the text property. Loses the
-            // caret position but won't crash on a Silica build that hides
-            // _editor.
-            var pos = focusedTextArea.cursorPosition
-            var t = focusedTextArea.text
-            focusedTextArea.text = t.substring(0, pos) + snippet + t.substring(pos)
+        var ed = focusedTextArea
+        var pos = ed.cursorPosition
+        ed.insert(pos, snippet)
+        ed.forceActiveFocus()
+        dirty = true
+    }
+
+    // Toggle bullet-list mode. First press inserts a <ul><li> and lights up
+    // the button; second press inserts a normal-style span to break out of
+    // the list, and the button goes dark again.
+    function applyBullet() {
+        if (!focusedTextArea) {
+            statusLabel.text = qsTr("Tap into a text area first.")
+            return
         }
+        var ed = focusedTextArea
+        var wasActive = page.formatBullet
+        page.formatBullet = !wasActive
+        var pos = ed.cursorPosition
+        if (!wasActive) {
+            // Activate: start a bullet list; cursor lands inside the first <li>
+            ed.insert(pos, "<ul><li>\u200B</li></ul>")
+        } else {
+            // Deactivate: break out of the list with a plain-style anchor
+            ed.insert(pos, "<span style=\"font-size:small;font-weight:normal\">\u200B</span>")
+        }
+        ed.cursorPosition = pos + 1
+        ed.forceActiveFocus()
         dirty = true
     }
 
@@ -126,24 +252,35 @@ Page {
     // ── Delegate components ─────────────────────────────────────────────
     Component {
         id: textBlockComp
-        TextArea {
+        // Use QML's native TextEdit directly so textFormat, insert(),
+        // selectionStart/End etc. are all accessible without private _editor hacks.
+        TextEdit {
             id: textBlock
             property int blockIndex: -1
-            width: column.width
-            placeholderText: blockIndex === 0 && page.blocks.length === 1
-                             ? qsTr("Start typing…") : ""
-            wrapMode: TextEdit.Wrap
+            // Guard flag: suppress onTextChanged side-effects while loading
+            property bool _loading: false
 
-            // Silica's TextArea wraps a private TextEdit (_editor) — the
-            // public `textFormat` alias isn't always honoured, so we bind
-            // through to the inner editor like the previous editor did.
-            Binding {
-                target: textBlock._editor
-                property: "textFormat"
-                value: page.richMode ? TextEdit.RichText : TextEdit.PlainText
+            width: column.width
+            textFormat: TextEdit.RichText
+            wrapMode: TextEdit.Wrap
+            color: Theme.primaryColor
+            selectionColor: Theme.highlightBackgroundColor
+            selectedTextColor: Theme.highlightColor
+            font.pixelSize: Theme.fontSizeSmall
+            cursorVisible: activeFocus
+
+            // Placeholder text — shown when the block is empty
+            Text {
+                anchors.fill: parent
+                visible: textBlock.text.length === 0 && !textBlock.activeFocus
+                         && textBlock.blockIndex === 0 && page.blocks.length === 1
+                text: qsTr("Start typing…")
+                color: Theme.secondaryColor
+                font: textBlock.font
             }
 
             onTextChanged: {
+                if (_loading) return
                 if (blockIndex < 0 || blockIndex >= page.blocks.length) return
                 if (page.blocks[blockIndex].type !== "text") return
                 if (page.blocks[blockIndex].html === text) return
@@ -154,6 +291,14 @@ Page {
                 if (activeFocus) {
                     page.focusedTextArea = textBlock
                     page.focusedBlockIndex = blockIndex
+                    // Reset format-toggle state when the user taps into a new
+                    // block — we don't know the character format at the new
+                    // cursor position, so start clean.
+                    page.formatBold      = false
+                    page.formatItalic    = false
+                    page.formatUnderline = false
+                    page.formatHeading   = false
+                    page.formatBullet    = false
                 }
             }
         }
@@ -231,11 +376,16 @@ Page {
 
             RichTextToolbar {
                 richMode: page.richMode
-                onToggleBold: page.insertHtmlAtCursor("<b></b>")
-                onToggleItalic: page.insertHtmlAtCursor("<i></i>")
-                onToggleUnderline: page.insertHtmlAtCursor("<u></u>")
-                onToggleHeading: page.insertHtmlAtCursor("<h2></h2>")
-                onInsertBullet: page.insertHtmlAtCursor("<ul><li></li></ul>")
+                boldActive:      page.formatBold
+                italicActive:    page.formatItalic
+                underlineActive: page.formatUnderline
+                headingActive:   page.formatHeading
+                bulletActive:    page.formatBullet
+                onToggleBold:      page.applyInlineFormat("b")
+                onToggleItalic:    page.applyInlineFormat("i")
+                onToggleUnderline: page.applyInlineFormat("u")
+                onToggleHeading:   page.applyHeading()
+                onInsertBullet:    page.applyBullet()
                 onInsertChecklist: {
                     var idx = page.focusedBlockIndex
                     if (idx < 0) idx = page.blocks.length - 1
@@ -260,12 +410,14 @@ Page {
                         sourceComponent: modelData && modelData.type === "checklist"
                                          ? checklistBlockComp : textBlockComp
                         onLoaded: {
+                            item._loading = true
                             item.blockIndex = index
                             if (modelData.type === "checklist") {
                                 item.initialItems = modelData.items || []
                             } else {
                                 item.text = modelData.html || ""
                             }
+                            item._loading = false
                         }
                     }
                 }
@@ -279,11 +431,6 @@ Page {
                 placeholderText: qsTr("Start typing…")
                 wrapMode: TextEdit.Wrap
 
-                Binding {
-                    target: plainArea._editor
-                    property: "textFormat"
-                    value: TextEdit.PlainText
-                }
 
                 onTextChanged: {
                     if (!page.richMode) page.dirty = true

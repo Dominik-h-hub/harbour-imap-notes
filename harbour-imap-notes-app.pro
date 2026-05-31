@@ -15,9 +15,6 @@ CONFIG += sailfishapp c++14
 
 QT += core gui qml quick sql network dbus
 
-# IMAP is implemented directly over QSslSocket (Qt5Network) — no external
-# library dependency required.
-
 SOURCES += \
     src/harbour-imap-notes.cpp \
     src/notesdatabase.cpp \

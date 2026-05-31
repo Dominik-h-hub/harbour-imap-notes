@@ -111,9 +111,10 @@ Dialog {
             }
 
             Button {
+                id: testButton
                 anchors.horizontalCenter: parent.horizontalCenter
-                text: testInProgress ? qsTr("Testing…") : qsTr("Test connection")
-                enabled: !testInProgress
+                text: testButton.testInProgress ? qsTr("Testing…") : qsTr("Test connection")
+                enabled: !testButton.testInProgress
                          && hostField.text.length > 0
                          && userField.text.length > 0
                          && passwordField.text.length > 0
@@ -121,7 +122,7 @@ Dialog {
                 property bool testInProgress: false
 
                 onClicked: {
-                    testInProgress = true
+                    testButton.testInProgress = true
                     Sync.testAccount({
                         "displayName": displayNameField.text,
                         "imapHost": hostField.text,
@@ -135,7 +136,7 @@ Dialog {
                 Connections {
                     target: Sync
                     onAccountTestResult: {
-                        parent.testInProgress = false
+                        testButton.testInProgress = false
                         testResult.text = message
                         testResult.color = success ? Theme.highlightColor : Theme.errorColor
                     }

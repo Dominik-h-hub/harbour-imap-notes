@@ -7,7 +7,6 @@ License:    EPL-2.0
 URL:        https://github.com/Dominik-h-hub/harbour-imap-notes
 Source0:    %{name}-%{version}.tar.bz2
 Requires:   sailfishsilica-qt5 >= 0.10.9
-Requires:   qt5-qtsql-plugin-sqlite
 BuildRequires:  pkgconfig(sailfishapp) >= 1.0.2
 BuildRequires:  pkgconfig(Qt5Core)
 BuildRequires:  pkgconfig(Qt5Qml)
